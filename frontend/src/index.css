@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #0a0c10;
+  --card-bg: #161b22;
+  --accent: #3fb950;
+  --text-primary: #f0f6fc;
+  --text-secondary: #8b949e;
+  --border: #30363d;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+.glass-card {
+  background: rgba(22, 27, 34, 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.fin-btn {
+  @apply px-6 py-3 rounded-full font-bold transition-all active:scale-95;
+  background: linear-gradient(135deg, #3fb950 0%, #2ea043 100%);
+  box-shadow: 0 4px 14px 0 rgba(63, 185, 80, 0.39);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 10px;
+}
+
+@keyframes glow {
+  0% { box-shadow: 0 0 5px rgba(63, 185, 80, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(63, 185, 80, 0.4); }
+  100% { box-shadow: 0 0 5px rgba(63, 185, 80, 0.2); }
+}
+
+.accent-glow {
+  animation: glow 3s infinite ease-in-out;
+}

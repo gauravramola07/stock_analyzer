@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+crewai
+yfinance
+pydantic
+python-dotenv
+duckduckgo-search
+langchain-openai
+pandas
