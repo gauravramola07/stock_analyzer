@@ -6,4 +6,7 @@ pydantic
 python-dotenv
 duckduckgo-search
 langchain-openai
+langchain-community
 pandas
+requests-cache
+sse-starlette

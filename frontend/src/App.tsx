@@ -1,394 +1,495 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { 
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
+import { motion } from 'framer-motion';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, 
-  Newspaper, Activity, BarChart3, Clock, ShieldCheck, Loader2,
-  ArrowRight, PieChart, Zap, Globe, Cpu, ChevronDown
+import {
+  Search, TrendingUp, TrendingDown, Newspaper, ShieldAlert,
+  BarChart4, CheckCircle2, Activity, Target, Info, Building2,
+  FileText, ExternalLink, Users, Globe, Database, Zap,
 } from 'lucide-react';
-
-// --- Types ---
-interface NewsArticle {
-  title: string;
-  source: string;
-  date: string;
-  sentiment: string;
-  summary: string;
-}
-
-interface AnalysisData {
-  ticker: string;
-  company_name: string;
-  current_price: number;
-  day_change_pct: number;
-  volatility: number;
-  key_metrics: any;
-  news_summary: NewsArticle[];
-  technical_analysis: any;
-  fundamental_analysis: any;
-  recommendation: string;
-  target_price: number;
-  time_horizon: string;
-  confidence_score: number;
-  risk_level: string;
-  verdict: string;
-  reasoning: string[];
-}
 
 const API_BASE = "http://localhost:8000/api";
 
+type ViewState = 'landing' | 'select' | 'dashboard';
+type PhaseStatus = 'idle' | 'running' | 'done';
+
+type NewsArticle = { title: string; source: string; date: string; sentiment: string; summary: string; url?: string; };
+type TargetPoint = { price?: number; rationale?: string; };
+type CompanyProfile = { business_summary?: string; sector?: string; industry?: string; full_time_employees?: number; country?: string; city?: string; website?: string; };
+type FinancialRecord = { period: string; revenue?: number; net_income?: number; gross_profit?: number; total_assets?: number; total_debt?: number; operating_cash_flow?: number; source?: string; };
+
+type FinalData = {
+  ticker: string; company_name?: string; current_price?: number; day_change_pct?: number;
+  volatility?: number; recommendation?: string; verdict?: string; quantitative_summary?: string;
+  time_horizon?: string; confidence_score?: number; risk_level?: string;
+  key_metrics?: { market_cap?: string; pe_ratio?: number; beta?: number; dividend_yield?: number; fifty_two_week_high?: number; fifty_two_week_low?: number; volume?: number; };
+  company_profile?: CompanyProfile; financial_records?: FinancialRecord[];
+  technical_analysis?: { trend?: string; volatility?: number; support?: number; resistance?: number; };
+  target_price?: number; target_prices?: { three_months?: TargetPoint; six_months?: TargetPoint; twelve_months?: TargetPoint; };
+  news_summary?: NewsArticle[]; reasoning?: string[];
+};
+
+const SENTIMENT_COLORS: Record<string, string> = {
+  Bullish: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+  Bearish: 'text-red-400 border-red-500/30 bg-red-500/10',
+  Neutral: 'text-slate-400 border-slate-700 bg-slate-800/50',
+};
+
+function formatLargeNumber(val: number | null | undefined): string {
+  if (val === null || val === undefined) return 'N/A';
+  if (Math.abs(val) >= 1e12) return `$${(val / 1e12).toFixed(2)}T`;
+  if (Math.abs(val) >= 1e9) return `$${(val / 1e9).toFixed(2)}B`;
+  if (Math.abs(val) >= 1e6) return `$${(val / 1e6).toFixed(2)}M`;
+  return `$${val.toFixed(0)}`;
+}
+
+function CustomTooltip({ active, payload, label }: any) {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div className="rounded-xl border border-slate-700/50 bg-slate-900/95 px-4 py-3 shadow-xl backdrop-blur-sm">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-bold text-emerald-400">${Number(payload[0].value).toFixed(2)}</div>
+    </div>
+  );
+}
+
+const PIPE_NODES = [
+  { id: 'prefetch', label: 'Prefetch Data', icon: Database, cx: 300, cy: 40 },
+  { id: 'data', label: 'Market Data', icon: BarChart4, cx: 110, cy: 135 },
+  { id: 'news', label: 'News Analysis', icon: Newspaper, cx: 300, cy: 135 },
+  { id: 'analysis', label: 'Technicals', icon: Activity, cx: 490, cy: 135 },
+  { id: 'risk', label: 'Risk Officer', icon: ShieldAlert, cx: 300, cy: 230 },
+  { id: 'expert', label: 'Equity Expert', icon: Target, cx: 300, cy: 320 },
+  { id: 'complete', label: 'Assemble', icon: CheckCircle2, cx: 300, cy: 400 },
+];
+
+const PIPE_EDGES = [
+  { from: 'prefetch', to: 'data' }, { from: 'prefetch', to: 'news' }, { from: 'prefetch', to: 'analysis' },
+  { from: 'data', to: 'risk' }, { from: 'news', to: 'risk' }, { from: 'analysis', to: 'risk' },
+  { from: 'risk', to: 'expert' }, { from: 'expert', to: 'complete' },
+];
+
+const NODE_W = 140, NODE_H = 50, NODE_R = 14;
+
+function edgePath(from: typeof PIPE_NODES[0], to: typeof PIPE_NODES[0]): string {
+  const x1 = from.cx, y1 = from.cy + NODE_H / 2;
+  const x2 = to.cx, y2 = to.cy - NODE_H / 2;
+  if (x1 === x2) return `M ${x1} ${y1} L ${x2} ${y2}`;
+  const midY = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+}
+
+function WorkflowPipeline({ phases }: { phases: Record<string, PhaseStatus> }) {
+  const nodeMap = new Map(PIPE_NODES.map(n => [n.id, n]));
+
+  return (
+    <div className="mx-auto max-w-xl py-4">
+      <svg viewBox="0 0 600 430" className="w-full">
+        {PIPE_EDGES.map((e, i) => {
+          const fromNode = nodeMap.get(e.from)!;
+          const toNode = nodeMap.get(e.to)!;
+          const fromS = phases[e.from] || 'idle';
+          const toS = phases[e.to] || 'idle';
+          const active = fromS === 'done' || fromS === 'running';
+          const flowing = fromS === 'done' && toS === 'running';
+          const d = edgePath(fromNode, toNode);
+
+          return flowing ? (
+            <motion.path key={`e${i}`} d={d} fill="none" stroke="#22c55e" strokeWidth={2}
+              strokeDasharray="8 4" opacity={0.9}
+              animate={{ strokeDashoffset: [0, -24] }}
+              transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }} />
+          ) : active ? (
+            <path key={`e${i}`} d={d} fill="none" stroke="#22c55e" strokeWidth={1.5}
+              strokeDasharray="none" opacity={0.7} />
+          ) : (
+            <path key={`e${i}`} d={d} fill="none" stroke="#1e293b" strokeWidth={1.5}
+              strokeDasharray="4 4" opacity={0.4} />
+          );
+        })}
+
+        {PIPE_NODES.map(node => {
+          const status = phases[node.id] || 'idle';
+          const x = node.cx - NODE_W / 2, y = node.cy - NODE_H / 2;
+          const isRunning = status === 'running';
+          const isDone = status === 'done';
+
+          const fillColor = isRunning ? '#05140d' : isDone ? '#061a0e' : '#0c1220';
+          const strokeColor = isRunning ? '#22c55e' : isDone ? '#16a34a' : '#1e293b';
+          const textColor = isRunning ? '#22c55e' : isDone ? '#86efac' : '#475569';
+
+          return (
+            <g key={node.id}>
+              {isRunning ? (
+                <motion.rect
+                  x={x} y={y} width={NODE_W} height={NODE_H} rx={NODE_R}
+                  fill={fillColor} stroke={strokeColor} strokeWidth={2.5}
+                  animate={{
+                    stroke: ['#22c55e', '#4ade80', '#22c55e'],
+                  }}
+                  transition={{ repeat: Infinity, duration: 1, ease: 'easeInOut' }} />
+              ) : (
+                <rect x={x} y={y} width={NODE_W} height={NODE_H} rx={NODE_R}
+                  fill={fillColor} stroke={strokeColor} strokeWidth={1.5} />
+              )}
+              <text x={node.cx} y={node.cy + 2} textAnchor="middle" dominantBaseline="middle"
+                fill={textColor} fontSize={12.5} fontWeight={isRunning ? 700 : isDone ? 600 : 400}
+                fontFamily="system-ui, sans-serif">
+                {node.label}
+              </text>
+              {isDone && (
+                <text x={x + NODE_W - 16} y={y + 14} fill="#22c55e" fontSize={18}
+                  fontFamily="system-ui, sans-serif" fontWeight={700}>✓</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 export default function App() {
-  const [view, setView] = useState<'landing' | 'select' | 'dashboard'>('landing');
-  const [ticker, setTicker] = useState('AAPL');
+  const [view, setView] = useState<ViewState>('landing');
+  const [query, setQuery] = useState('');
   const [tickers, setTickers] = useState<string[]>([]);
+  const [selectedTicker, setSelectedTicker] = useState('');
+  const [data, setData] = useState<FinalData | null>(null);
+  const [history, setHistory] = useState<{ date: string; price: number }[]>([]);
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<AnalysisData | null>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [error, setError] = useState<string>('');
+  const [activePhases, setActivePhases] = useState<Record<string, PhaseStatus>>({
+    prefetch: 'idle', data: 'idle', news: 'idle', analysis: 'idle',
+    risk: 'idle', expert: 'idle', complete: 'idle',
+  });
+  const dataReceivedRef = useRef(false);
 
   useEffect(() => {
-    fetchTickers();
+    axios.get(`${API_BASE}/tickers/search`).then((res) => setTickers(res.data)).catch(() => setTickers(['AAPL', 'NVDA', 'TSLA']));
   }, []);
 
-  const fetchTickers = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/tickers`);
-      setTickers(res.data);
-    } catch (err) {
-      console.error("Failed to fetch tickers", err);
-    }
+  const filteredTickers = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    return q ? tickers.filter((t) => t.includes(q)) : tickers;
+  }, [query, tickers]);
+
+  const MAX_VISIBLE = 120;
+  const visibleTickers = filteredTickers.slice(0, MAX_VISIBLE);
+
+  const formatNum = (val: unknown, decimals = 2) => {
+    if (val === null || val === undefined || Number.isNaN(Number(val))) return 'N/A';
+    return Number(val).toFixed(decimals);
   };
 
-  const handleAnalyze = async (symbol: string) => {
-    setTicker(symbol);
+  const handleSelectTicker = async (symbol: string) => {
+    setSelectedTicker(symbol);
     setView('dashboard');
     setLoading(true);
-    setError(null);
+    setError('');
     setData(null);
+    setLogs([]);
+    setActivePhases({ prefetch: 'idle', data: 'idle', news: 'idle', analysis: 'idle', risk: 'idle', expert: 'idle', complete: 'idle' });
+    dataReceivedRef.current = false;
+
     try {
       const histRes = await axios.get(`${API_BASE}/stock/${symbol}/history`);
-      setHistory(histRes.data);
-      const res = await axios.post(`${API_BASE}/analyze`, { ticker: symbol }, { timeout: 600000 });
-      setData(res.data);
+      setHistory(histRes.data.history || []);
+
+      const es = new EventSource(`${API_BASE}/analyze/stream/${symbol}`);
+
+      es.addEventListener('log', (e: MessageEvent) => {
+        setLogs((prev) => [...prev.slice(-12), String(e.data)]);
+      });
+
+      es.addEventListener('phase', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(String(e.data));
+          setActivePhases((prev) => ({ ...prev, [payload.step]: payload.status === 'done' ? 'done' : 'running' }));
+        } catch {}
+      });
+
+      es.addEventListener('final_result', (e: MessageEvent) => {
+        try {
+          dataReceivedRef.current = true;
+          setData(JSON.parse(String(e.data)));
+          setActivePhases((prev) => ({ ...prev, complete: 'done' }));
+        } catch {
+          setError('The server returned data that could not be parsed as JSON.');
+        } finally {
+          setLoading(false);
+          es.close();
+        }
+      });
+
+      es.onerror = () => {
+        setLoading(false);
+        es.close();
+        if (!dataReceivedRef.current) {
+          setError('Stream closed before a final result was returned.');
+        }
+      };
     } catch (err: any) {
-      setError(err.response?.data?.detail || "System overload. Please try again in a moment.");
-    } finally {
       setLoading(false);
+      setError(err?.response?.data?.detail || err?.message || 'Failed to load ticker data.');
     }
   };
 
+  const minPrice = history.length ? Math.min(...history.map((h) => h.price)) : 0;
+  const maxPrice = history.length ? Math.max(...history.map((h) => h.price)) : 0;
+
   return (
-    <div className="min-h-screen text-slate-100 font-sans">
-      <AnimatePresence mode="wait">
-        
-        {/* --- 1. LANDING PAGE --- */}
-        {view === 'landing' && (
-          <motion.div 
-            key="landing"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -50 }}
-            className="flex flex-col items-center justify-center min-h-screen p-6 text-center"
-          >
-            <motion.div 
-              initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-              className="bg-green-500/20 p-4 rounded-3xl mb-8 accent-glow"
-            >
-              <TrendingUp className="text-green-500 w-12 h-12" />
-            </motion.div>
-            <h1 className="text-6xl md:text-8xl font-black mb-6 tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white to-slate-500">
-              STOCK INTELLIGENCE
-            </h1>
-            <p className="max-w-2xl text-slate-400 text-lg md:text-xl mb-12 leading-relaxed">
-              Our Multi-Agent AI Swarm analyzes thousands of data points—from real-time price action to 
-              global sentiment—to provide institutional-grade investment verdicts.
+    <div className="min-h-screen bg-[#05070a] text-slate-100">
+      {view === 'landing' && (
+        <div className="flex min-h-screen flex-col items-center justify-center px-6">
+          <div className="max-w-2xl text-center">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
+              <Activity size={16} /> Financial intelligence dashboard
+            </div>
+            <h1 className="mb-5 text-5xl font-black tracking-tight md:text-7xl">STOCK INTELLIGENCE</h1>
+            <p className="mx-auto mb-8 max-w-xl text-slate-400">
+              Streamed market data, technical analysis, news sentiment, and a final investment verdict in one view.
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mb-12 text-left">
-              <FeatureCard icon={<Cpu className="text-green-400"/>} title="Neural Analysis" desc="Deep-dive into technical indicators & volatility." />
-              <FeatureCard icon={<Globe className="text-blue-400"/>} title="Global Sentiment" desc="Real-time news processing from verified sources." />
-              <FeatureCard icon={<Zap className="text-amber-400"/>} title="Instant Execution" desc="Synthesized investment thesis in seconds." />
-            </div>
-            <button 
-              onClick={() => setView('select')}
-              className="fin-btn flex items-center gap-3 text-lg group"
-            >
-              Get Started <ArrowRight className="group-hover:translate-x-1 transition-transform" />
+            <button onClick={() => setView('select')} className="rounded-full bg-emerald-500 px-8 py-3 font-bold text-black transition hover:bg-emerald-400">
+              Access System
             </button>
-          </motion.div>
-        )}
+          </div>
+        </div>
+      )}
 
-        {/* --- 2. TICKER SELECTION --- */}
-        {view === 'select' && (
-          <motion.div 
-            key="select"
-            initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-            className="flex flex-col items-center justify-center min-h-screen p-6"
-          >
-            <div className="glass-card p-10 max-w-xl w-full text-center">
-              <PieChart className="text-green-500 mx-auto mb-6 w-10 h-10" />
-              <h2 className="text-3xl font-bold mb-2">Identify Target</h2>
-              <p className="text-slate-500 mb-8">Select a NASDAQ ticker for comprehensive analysis</p>
-              
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-8">
-                {tickers.map(t => (
-                  <button 
-                    key={t}
-                    onClick={() => handleAnalyze(t)}
-                    className="p-3 rounded-xl bg-slate-800/50 border border-slate-700 hover:border-green-500/50 hover:bg-green-500/5 transition-all font-bold tracking-wider"
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-              <div className="text-xs text-slate-600 uppercase tracking-widest font-bold">
-                Nasdaq Real-time Coverage Enabled
-              </div>
+      {view === 'select' && (
+        <div className="mx-auto max-w-4xl px-6 py-10">
+          <div className="mb-6 flex items-center justify-between gap-4">
+            <button onClick={() => setView('landing')} className="rounded-full border border-slate-800 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600">Back</button>
+            <div className="text-sm text-slate-500">Choose a ticker to start analysis</div>
+          </div>
+          <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6 shadow-2xl shadow-black/20">
+            <div className="mb-4 flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3">
+              <Search size={18} className="text-slate-500" />
+              <input className="w-full bg-transparent text-slate-100 outline-none placeholder:text-slate-500" placeholder="Search ticker symbol..." value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
-          </motion.div>
-        )}
+            <div className="mb-2 text-xs text-slate-500">
+              {filteredTickers.length > MAX_VISIBLE ? `Showing ${MAX_VISIBLE} of ${filteredTickers.length} tickers — type to narrow results` : `${filteredTickers.length} tickers available`}
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {visibleTickers.map((symbol) => (
+                <button key={symbol} onClick={() => handleSelectTicker(symbol)} className="rounded-2xl border border-slate-800 bg-slate-950 px-4 py-5 text-left transition hover:-translate-y-0.5 hover:border-emerald-500/40 hover:bg-slate-900">
+                  <div className="text-lg font-bold">{symbol}</div>
+                  <div className="text-xs text-slate-500">Run analysis</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
-        {/* --- 3. MAIN DASHBOARD --- */}
-        {view === 'dashboard' && (
-          <motion.div 
-            key="dashboard"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="pb-12"
-          >
-            <nav className="border-b border-slate-800 sticky top-0 z-50 bg-black/50 backdrop-blur-xl px-6 py-4">
-              <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-                <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('landing')}>
-                  <div className="bg-green-500 p-1.5 rounded-lg">
-                    <TrendingUp className="text-black w-5 h-5" />
-                  </div>
-                  <h1 className="text-lg font-bold tracking-tight">Stock Intelligence</h1>
-                </div>
-                <div className="flex gap-4">
-                  <button 
-                    onClick={() => setView('select')}
-                    className="text-sm font-bold text-slate-400 hover:text-white transition-colors"
-                  >
-                    Switch Ticker
-                  </button>
-                </div>
+      {view === 'dashboard' && (
+        <div className="mx-auto max-w-7xl px-6 py-8">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+            <button onClick={() => { setView('select'); setData(null); setError(''); setLogs([]); }} className="rounded-full border border-slate-800 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600">Change ticker</button>
+            <div className="text-sm text-slate-500">{selectedTicker ? `Analyzing ${selectedTicker}` : 'No ticker selected'}</div>
+          </div>
+
+          {loading && (
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+              <div className="mb-4 flex items-center gap-2">
+                <Zap size={18} className="text-emerald-400" />
+                <span className="text-lg font-bold">Agent pipeline</span>
+                <span className="text-xs text-slate-500 ml-2">{selectedTicker}</span>
               </div>
-            </nav>
-
-            <main className="max-w-[1400px] mx-auto px-6 py-8">
-              {loading && <ProcessingOverlay ticker={ticker} />}
-              
-              {error && (
-                <div className="mb-6 p-4 bg-red-900/20 border border-red-500/30 rounded-2xl flex items-center gap-3 text-red-400">
-                  <AlertTriangle className="w-5 h-5" />
-                  <p>{error}</p>
+              <WorkflowPipeline phases={activePhases} />
+              {logs.length > 0 && (
+                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950 p-4 max-h-32 overflow-auto">
+                  <div className="text-xs text-slate-500 mb-2">Live feed</div>
+                  {logs.slice(-6).map((line, idx) => (
+                    <div key={idx} className="text-xs text-slate-400 py-0.5">{line}</div>
+                  ))}
                 </div>
               )}
+            </div>
+          )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                
-                {/* Chart & Core Metrics */}
-                <div className="lg:col-span-8 space-y-6">
-                  <div className="glass-card p-8">
-                    <div className="flex justify-between items-start mb-8">
-                      <div>
-                        <div className="flex items-center gap-3 mb-1">
-                          <span className="text-4xl font-black tracking-tighter">{data?.ticker || ticker}</span>
-                          <span className="text-xs font-bold text-slate-500 bg-slate-800 px-2 py-1 rounded-md uppercase">
-                            {data?.company_name || "Querying Database..."}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <span className="text-5xl font-bold tracking-tight">
-                            ${data?.current_price?.toLocaleString() || "---"}
-                          </span>
-                          <span className={`flex items-center gap-1 font-bold text-lg ${ (data?.day_change_pct || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                            {(data?.day_change_pct || 0) >= 0 ? <TrendingUp size={20}/> : <TrendingDown size={20}/>}
-                            {data?.day_change_pct?.toFixed(2)}%
-                          </span>
-                        </div>
+          {error && (
+            <div className="mb-6 rounded-3xl border border-red-900/50 bg-red-950/20 p-5 text-red-200">{error}</div>
+          )}
+
+          {data && (
+            <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
+              <div className="space-y-8 lg:col-span-2">
+                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                  <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
+                    <div>
+                      <div className="text-sm uppercase tracking-widest text-slate-500">Equity dossier</div>
+                      <h2 className="mt-1 text-3xl font-black">{data.ticker} {data.company_name ? `- ${data.company_name}` : ''}</h2>
+                      {data.company_profile?.sector && (<div className="mt-1 text-xs text-slate-500">{data.company_profile.industry || data.company_profile.sector}</div>)}
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950 px-5 py-3">
+                      <div className="text-xs uppercase text-slate-500">Current price</div>
+                      <div className="text-2xl font-bold">${formatNum(data.current_price)}</div>
+                      <div className={`text-sm flex items-center gap-1 ${Number(data.day_change_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {Number(data.day_change_pct || 0) >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                        {formatNum(data.day_change_pct)}%
                       </div>
                     </div>
+                  </div>
+                  <div className="h-[340px] mt-2">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={history} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#22c55e" stopOpacity={0.35} />
+                            <stop offset="50%" stopColor="#22c55e" stopOpacity={0.12} />
+                            <stop offset="100%" stopColor="#22c55e" stopOpacity={0.02} />
+                          </linearGradient>
+                          <linearGradient id="strokeGradient" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0%" stopColor="#16a34a" /><stop offset="100%" stopColor="#22c55e" />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" strokeOpacity={0.6} />
+                        <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickLine={{ stroke: '#334155' }} axisLine={{ stroke: '#334155' }} tickFormatter={(v: string) => v.slice(5)} />
+                        <YAxis tick={{ fill: '#64748b', fontSize: 11 }} tickLine={{ stroke: '#334155' }} axisLine={{ stroke: '#334155' }} domain={[minPrice * 0.98, maxPrice * 1.02]} tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
+                        <Tooltip content={<CustomTooltip />} />
+                        {data.technical_analysis?.support && (<ReferenceLine y={data.technical_analysis.support} stroke="#f59e0b" strokeDasharray="6 3" strokeOpacity={0.6} label={{ value: 'Support', fill: '#f59e0b', fontSize: 10, position: 'insideBottomLeft' }} />)}
+                        {data.technical_analysis?.resistance && (<ReferenceLine y={data.technical_analysis.resistance} stroke="#ef4444" strokeDasharray="6 3" strokeOpacity={0.6} label={{ value: 'Resistance', fill: '#ef4444', fontSize: 10, position: 'insideTopLeft' }} />)}
+                        <Area type="monotone" dataKey="price" stroke="url(#strokeGradient)" strokeWidth={2.5} fill="url(#priceGradient)" dot={false} activeDot={{ r: 5, fill: '#22c55e', stroke: '#05070a', strokeWidth: 2 }} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
 
-                    <div className="h-[400px] w-full mt-4">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={history}>
-                          <defs>
-                            <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/>
-                              <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
-                          <XAxis dataKey="date" hide />
-                          <YAxis domain={['auto', 'auto']} hide />
-                          <Tooltip 
-                            contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', border: '1px solid #334155', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.5)' }}
-                            itemStyle={{ color: '#22c55e', fontWeight: 'bold' }}
-                          />
-                          <Area type="monotone" dataKey="price" stroke="#22c55e" strokeWidth={3} fillOpacity={1} fill="url(#colorPrice)" />
-                        </AreaChart>
-                      </ResponsiveContainer>
+                {(data.company_profile || (data.financial_records && data.financial_records.length > 0)) && (
+                  <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                    <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Building2 size={18} />Company overview &amp; financials</div>
+                    {data.company_profile && (
+                      <>
+                        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4 text-sm">
+                          {data.company_profile.sector && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="text-xs text-slate-500">Sector</div><div className="font-semibold">{data.company_profile.sector}</div></div>)}
+                          {data.company_profile.industry && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="text-xs text-slate-500">Industry</div><div className="font-semibold">{data.company_profile.industry}</div></div>)}
+                          {data.company_profile.full_time_employees && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-center gap-1 text-xs text-slate-500"><Users size={12} /> Employees</div><div className="font-semibold">{data.company_profile.full_time_employees.toLocaleString()}</div></div>)}
+                          {data.company_profile.country && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-center gap-1 text-xs text-slate-500"><Globe size={12} /> HQ</div><div className="font-semibold">{data.company_profile.city ? `${data.company_profile.city}, ` : ''}{data.company_profile.country}</div></div>)}
+                        </div>
+                        {data.company_profile.business_summary && (<div className="mb-6 rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm leading-6 text-slate-300">{data.company_profile.business_summary}</div>)}
+                        {data.company_profile.website && (<a href={data.company_profile.website} target="_blank" rel="noopener noreferrer" className="mb-4 inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition"><ExternalLink size={12} />{data.company_profile.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</a>)}
+                      </>
+                    )}
+                    {data.financial_records && data.financial_records.length > 0 && (
+                      <>
+                        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-400"><FileText size={14} />SEC financial records{data.financial_records[0]?.source && (<span className="text-xs text-slate-600">({data.financial_records[0].source})</span>)}</div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead><tr className="border-b border-slate-800">
+                              <th className="pb-2 pr-4 text-left text-xs text-slate-500">Period</th>
+                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Revenue</th>
+                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Net Income</th>
+                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Gross Profit</th>
+                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Total Assets</th>
+                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Total Debt</th>
+                              <th className="pb-2 text-right text-xs text-slate-500">Cash Flow</th>
+                            </tr></thead>
+                            <tbody>{data.financial_records.map((rec) => (
+                              <tr key={rec.period} className="border-b border-slate-800/50">
+                                <td className="py-2.5 pr-4 font-mono text-xs text-slate-400">{rec.period}</td>
+                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.revenue)}</td>
+                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.net_income)}</td>
+                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.gross_profit)}</td>
+                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.total_assets)}</td>
+                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.total_debt)}</td>
+                                <td className="py-2.5 text-right font-semibold">{formatLargeNumber(rec.operating_cash_flow)}</td>
+                              </tr>
+                            ))}</tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                    <div className="mb-4 flex items-center gap-2 text-lg font-bold"><BarChart4 size={18} />Technical analysis</div>
+                    <div className="space-y-3 text-sm text-slate-300">
+                      <div className="flex justify-between"><span>Trend</span><span className="font-semibold">{data.technical_analysis?.trend || 'N/A'}</span></div>
+                      <div className="flex justify-between"><span>Volatility</span><span className="font-semibold">{formatNum(data.technical_analysis?.volatility)}</span></div>
+                      <div className="flex justify-between"><span>Support</span><span className="font-semibold text-amber-400">${formatNum(data.technical_analysis?.support)}</span></div>
+                      <div className="flex justify-between"><span>Resistance</span><span className="font-semibold text-red-400">${formatNum(data.technical_analysis?.resistance)}</span></div>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <MetricBox label="Market Cap" value={data?.key_metrics?.market_cap || "---"} icon={<Activity size={16}/>} />
-                    <MetricBox label="P/E Ratio" value={data?.key_metrics?.pe_ratio?.toString() || "---"} icon={<BarChart3 size={16}/>} />
-                    <MetricBox label="Beta (Risk)" value={data?.key_metrics?.beta?.toString() || "---"} icon={<ShieldCheck size={16}/>} />
-                    <MetricBox label="Volatility" value={`${data?.volatility?.toFixed(2)}%` || "---"} icon={<Activity size={16}/>} />
-                  </div>
-
-                  <div className="glass-card p-8 border-l-4 border-l-green-500">
-                    <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                      <CheckCircle2 className="text-green-500" />
-                      Strategic Verdict
-                    </h3>
-                    <p className="text-slate-300 text-lg leading-relaxed mb-8">
-                      {data?.verdict || "System is aggregating agent reports..."}
-                    </p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {data?.reasoning.map((r, i) => (
-                        <div key={i} className="flex gap-4 p-4 rounded-xl bg-slate-800/30 border border-slate-700/50 text-sm text-slate-400 leading-relaxed">
-                          <div className="mt-1 w-2 h-2 rounded-full bg-green-500 shrink-0 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
-                          {r}
-                        </div>
-                      ))}
+                  <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                    <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Target size={18} />Risk / conviction</div>
+                    <div className="space-y-3 text-sm text-slate-300">
+                      <div className="flex justify-between"><span>Recommendation</span><span className="font-semibold text-emerald-400">{data.recommendation || 'N/A'}</span></div>
+                      <div className="flex justify-between"><span>Risk level</span><span className="font-semibold">{data.risk_level || 'N/A'}</span></div>
+                      <div className="flex justify-between"><span>Confidence</span><span className="font-semibold">{formatNum(data.confidence_score)}%</span></div>
+                      <div className="flex justify-between"><span>Horizon</span><span className="font-semibold">{data.time_horizon || 'N/A'}</span></div>
                     </div>
                   </div>
                 </div>
 
-                {/* Sidebar: Verdict & Intelligence */}
-                <div className="lg:col-span-4 space-y-6">
-                  
-                  <div className="glass-card p-8 bg-gradient-to-br from-green-600 to-green-900 border-none shadow-[0_0_40px_rgba(34,197,94,0.15)]">
-                    <div className="space-y-8">
-                      <div>
-                        <label className="text-green-200 text-xs font-black uppercase tracking-[0.2em]">Analyst Rating</label>
-                        <div className="text-5xl font-black mt-2 tracking-tight text-white drop-shadow-lg">
-                          {data?.recommendation || "---"}
+                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                  <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Newspaper size={18} />News summary</div>
+                  <div className="space-y-4">
+                    {(data.news_summary || []).slice(0, 5).map((article, idx) => (
+                      <div key={`${article.title}-${idx}`} className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="font-semibold text-slate-100">{article.title || 'Untitled'}</div>
+                          <span className={`rounded-full border px-2 py-0.5 text-xs ${SENTIMENT_COLORS[article.sentiment] || SENTIMENT_COLORS.Neutral}`}>{article.sentiment || 'Neutral'}</span>
                         </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                          <span>{article.source || 'Unknown'}</span>
+                          {article.date && <span>• {article.date}</span>}
+                          {article.url && (<a href={article.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-blue-400 hover:text-blue-300"><ExternalLink size={10} />link</a>)}
+                        </div>
+                        <p className="mt-3 text-sm leading-5 text-slate-300">{article.summary || 'No summary available.'}</p>
                       </div>
-
-                      <div className="grid grid-cols-2 gap-6">
-                        <div>
-                          <label className="text-green-200 text-xs font-black uppercase tracking-[0.2em]">Target Price</label>
-                          <div className="text-3xl font-bold mt-1 text-white">
-                            ${data?.target_price || "---"}
-                          </div>
-                        </div>
-                        <div>
-                          <label className="text-green-200 text-xs font-black uppercase tracking-[0.2em]">Confidence</label>
-                          <div className="text-3xl font-bold mt-1 text-white">
-                            {data?.confidence_score ? `${(data.confidence_score * 100).toFixed(0)}%` : "---"}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-6 border-t border-white/10 space-y-3">
-                        <div className="flex justify-between items-center text-sm font-bold">
-                          <span className="text-green-100">Risk Profile</span>
-                          <span className="bg-white/20 px-3 py-1 rounded-full uppercase tracking-widest text-[10px]">
-                            {data?.risk_level || "---"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center text-sm font-bold">
-                          <span className="text-green-100">Time Horizon</span>
-                          <span className="text-white">{data?.time_horizon || "---"}</span>
-                        </div>
-                      </div>
-                    </div>
+                    ))}
+                    {(!data.news_summary || data.news_summary.length === 0) && (<div className="text-sm text-slate-500">No news items returned for this ticker.</div>)}
                   </div>
+                </div>
 
-                  <div className="glass-card flex flex-col h-[600px]">
-                    <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-                      <h3 className="font-bold flex items-center gap-2">
-                        <Newspaper size={18} className="text-green-500" />
-                        Intelligence Feed
-                      </h3>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
-                      {data?.news_summary.map((news, i) => (
-                        <div key={i} className="group cursor-pointer">
-                          <div className="flex justify-between items-center mb-2">
-                            <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${
-                              news.sentiment.toLowerCase().includes('bullish') ? 'bg-green-500/10 text-green-500' : 
-                              news.sentiment.toLowerCase().includes('bearish') ? 'bg-red-500/10 text-red-500' : 'bg-slate-500/10 text-slate-500'
-                            }`}>
-                              {news.sentiment}
-                            </span>
-                            <span className="text-[10px] text-slate-500 flex items-center gap-1 font-bold">
-                              <Clock size={10} /> {news.date}
-                            </span>
-                          </div>
-                          <h4 className="text-sm font-bold text-slate-100 group-hover:text-green-400 transition-colors leading-snug mb-2">
-                            {news.title}
-                          </h4>
-                          <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">{news.summary}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
+                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                  <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Info size={18} />Verdict</div>
+                  <p className="leading-7 text-slate-300">{data.verdict || 'No verdict returned.'}</p>
+                  {data.quantitative_summary && (<p className="mt-4 rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4 text-sm text-blue-100">{data.quantitative_summary}</p>)}
                 </div>
               </div>
-            </main>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
-function FeatureCard({ icon, title, desc }: { icon: React.ReactNode, title: string, desc: string }) {
-  return (
-    <div className="glass-card p-6 bg-slate-900/40">
-      <div className="mb-4">{icon}</div>
-      <h3 className="font-bold text-lg mb-1">{title}</h3>
-      <p className="text-sm text-slate-500 leading-relaxed">{desc}</p>
+              <div className="space-y-8">
+                <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
+                  <div className="mb-2 text-xs uppercase tracking-widest text-slate-500">Target prices</div>
+                  <div className="text-4xl font-black text-emerald-400">${formatNum(data.target_price)}</div>
+                  <div className="mt-6 space-y-3 text-sm">
+                    <div className="flex justify-between"><span>3M target</span><span className="font-bold">${formatNum(data.target_prices?.three_months?.price)}</span></div>
+                    <div className="flex justify-between"><span>6M target</span><span className="font-bold">${formatNum(data.target_prices?.six_months?.price)}</span></div>
+                    <div className="flex justify-between"><span>12M target</span><span className="font-bold">${formatNum(data.target_prices?.twelve_months?.price)}</span></div>
+                  </div>
+                </div>
+                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                  <div className="mb-4 text-lg font-bold">Key metrics</div>
+                  <div className="space-y-3 text-sm text-slate-300">
+                    <div className="flex justify-between"><span>Market cap</span><span className="font-semibold">{data.key_metrics?.market_cap || 'N/A'}</span></div>
+                    <div className="flex justify-between"><span>P/E ratio</span><span className="font-semibold">{formatNum(data.key_metrics?.pe_ratio)}</span></div>
+                    <div className="flex justify-between"><span>Beta</span><span className="font-semibold">{formatNum(data.key_metrics?.beta)}</span></div>
+                    <div className="flex justify-between"><span>Dividend yield</span><span className="font-semibold">{formatNum(data.key_metrics?.dividend_yield)}%</span></div>
+                    <div className="flex justify-between"><span>52W high</span><span className="font-semibold">${formatNum(data.key_metrics?.fifty_two_week_high)}</span></div>
+                    <div className="flex justify-between"><span>52W low</span><span className="font-semibold">${formatNum(data.key_metrics?.fifty_two_week_low)}</span></div>
+                    <div className="flex justify-between"><span>Volume</span><span className="font-semibold">{data.key_metrics?.volume?.toLocaleString() || 'N/A'}</span></div>
+                  </div>
+                </div>
+                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
+                  <div className="mb-4 flex items-center gap-2 text-lg font-bold"><ShieldAlert size={18} />Reasoning</div>
+                  <div className="space-y-3">
+                    {(data.reasoning || []).map((point, idx) => (<div key={idx} className="rounded-2xl border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">{point}</div>))}
+                    {(!data.reasoning || data.reasoning.length === 0) && (<div className="text-sm text-slate-500">No reasoning points returned.</div>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
-  );
-}
-
-function MetricBox({ label, value, icon }: { label: string, value: string, icon: React.ReactNode }) {
-  return (
-    <div className="glass-card p-6 flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-slate-500">
-        {icon}
-        <span className="text-[10px] font-black uppercase tracking-[0.2em]">{label}</span>
-      </div>
-      <div className="text-xl font-bold text-slate-100 tracking-tight">{value}</div>
-    </div>
-  );
-}
-
-function ProcessingOverlay({ ticker }: { ticker: string }) {
-  return (
-    <motion.div 
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-      className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center"
-    >
-      <div className="relative mb-8">
-        <Loader2 className="w-20 h-20 text-green-500 animate-spin" />
-        <div className="absolute inset-0 flex items-center justify-center font-black text-xs">
-          AI
-        </div>
-      </div>
-      <h2 className="text-3xl font-black tracking-tighter mb-2 italic">DEPLOYING AGENT SWARM FOR {ticker}</h2>
-      <div className="max-w-md space-y-4">
-        <div className="text-xs text-green-500/70 font-mono tracking-widest uppercase">
-          Executing Data Research... OK
-        </div>
-        <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-          <motion.div 
-            initial={{ width: "0%" }} animate={{ width: "100%" }}
-            transition={{ duration: 15, ease: "linear" }}
-            className="h-full bg-green-500"
-          />
-        </div>
-        <p className="text-slate-400 text-sm">
-          Please wait as our agents fetch NASDAQ fundamentals, evaluate real-time sentiment, and compute technical volatility models.
-        </p>
-      </div>
-    </motion.div>
   );
 }
