@@ -1,0 +1,11 @@
+# Hugging Face Backend ignores
+yfinance_cache.sqlite
+yfinance_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+.DS_Store
