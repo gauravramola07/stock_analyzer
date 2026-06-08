@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import {
@@ -7,169 +7,232 @@ import {
 } from 'recharts';
 import {
   Search, TrendingUp, TrendingDown, Newspaper, ShieldAlert,
-  BarChart4, CheckCircle2, Activity, Target, Info, Building2,
-  FileText, ExternalLink, Users, Globe, Database, Zap,
+  BarChart4, Target, Info, Building2,
+  FileText, ExternalLink, Zap, ArrowLeft, ChevronRight,
 } from 'lucide-react';
+import { useTheme } from './hooks/useTheme';
+import { useAnimatedNumber } from './hooks/useAnimatedNumber';
+import ThreeHero from './components/ThreeHero';
+import ThemeToggle from './components/ThemeToggle';
+import TickerStrip from './components/TickerStrip';
+import SkeletonCard from './components/SkeletonCard';
+import WorkflowPipeline from './components/WorkflowPipeline';
+import CustomTooltip from './components/CustomTooltip';
+import SectionHeader from './components/SectionHeader';
+import MetricRow from './components/MetricRow';
+import DataCell from './components/DataCell';
+import NewsCard from './components/NewsCard';
+import ReasoningItem from './components/ReasoningItem';
+import EmptyState from './components/EmptyState';
 
-const API_BASE = "http://localhost:8000/api";
+export type ViewState = 'landing' | 'select' | 'dashboard';
+export type PhaseStatus = 'idle' | 'running' | 'done';
 
-type ViewState = 'landing' | 'select' | 'dashboard';
-type PhaseStatus = 'idle' | 'running' | 'done';
+export interface NewsArticle {
+  title: string;
+  source: string;
+  date: string;
+  sentiment: string;
+  summary: string;
+  url?: string;
+}
 
-type NewsArticle = { title: string; source: string; date: string; sentiment: string; summary: string; url?: string; };
-type TargetPoint = { price?: number; rationale?: string; };
-type CompanyProfile = { business_summary?: string; sector?: string; industry?: string; full_time_employees?: number; country?: string; city?: string; website?: string; };
-type FinancialRecord = { period: string; revenue?: number; net_income?: number; gross_profit?: number; total_assets?: number; total_debt?: number; operating_cash_flow?: number; source?: string; };
+interface TargetPoint {
+  price?: number;
+  rationale?: string;
+}
 
-type FinalData = {
-  ticker: string; company_name?: string; current_price?: number; day_change_pct?: number;
-  volatility?: number; recommendation?: string; verdict?: string; quantitative_summary?: string;
-  time_horizon?: string; confidence_score?: number; risk_level?: string;
-  key_metrics?: { market_cap?: string; pe_ratio?: number; beta?: number; dividend_yield?: number; fifty_two_week_high?: number; fifty_two_week_low?: number; volume?: number; };
-  company_profile?: CompanyProfile; financial_records?: FinancialRecord[];
-  technical_analysis?: { trend?: string; volatility?: number; support?: number; resistance?: number; };
-  target_price?: number; target_prices?: { three_months?: TargetPoint; six_months?: TargetPoint; twelve_months?: TargetPoint; };
-  news_summary?: NewsArticle[]; reasoning?: string[];
-};
+interface CompanyProfile {
+  business_summary?: string;
+  sector?: string;
+  industry?: string;
+  full_time_employees?: number;
+  country?: string;
+  city?: string;
+  website?: string;
+}
 
-const SENTIMENT_COLORS: Record<string, string> = {
-  Bullish: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-  Bearish: 'text-red-400 border-red-500/30 bg-red-500/10',
-  Neutral: 'text-slate-400 border-slate-700 bg-slate-800/50',
-};
+interface FinancialRecord {
+  period: string;
+  revenue?: number;
+  net_income?: number;
+  gross_profit?: number;
+  total_assets?: number;
+  total_debt?: number;
+  operating_cash_flow?: number;
+  source?: string;
+}
+
+interface KeyMetrics {
+  market_cap?: string;
+  pe_ratio?: number;
+  forward_pe?: number;
+  price_to_book?: number;
+  eps_trailing?: number;
+  beta?: number;
+  dividend_yield?: number;
+  fifty_two_week_high?: number;
+  fifty_two_week_low?: number;
+  volume?: number;
+  revenue_growth?: number;
+  earnings_growth?: number;
+  profit_margins?: number;
+  return_on_equity?: number;
+  debt_to_equity?: number;
+}
+
+interface TechnicalAnalysis {
+  trend?: string;
+  volatility?: number;
+  support?: number;
+  resistance?: number;
+  momentum?: string;
+  rsi_interpretation?: string;
+  macd_interpretation?: string;
+}
+
+interface TechnicalIndicators {
+  sma_20?: number;
+  sma_50?: number;
+  rsi_14?: number;
+  macd_line?: number;
+  macd_signal?: number;
+  macd_histogram?: number;
+  macd_crossover?: string;
+  bb_upper?: number;
+  bb_lower?: number;
+  bb_position?: number;
+  price_vs_sma20?: string;
+  price_vs_sma50?: string;
+  rsi_signal?: string;
+  fifty_two_week_position?: number;
+  avg_volume_ratio?: number;
+}
+
+interface AnalystConsensus {
+  mean_target?: number;
+  high_target?: number;
+  low_target?: number;
+  num_analysts?: number;
+  recommendation_key?: string;
+  strong_buy?: number;
+  buy?: number;
+  hold?: number;
+  sell?: number;
+  strong_sell?: number;
+}
+
+interface DataQuality {
+  level?: string;
+  label?: string;
+  has_analyst_consensus?: boolean;
+  has_technical_indicators?: boolean;
+  has_news?: boolean;
+  has_financials?: boolean;
+}
+
+interface TargetPrices {
+  three_months?: TargetPoint;
+  six_months?: TargetPoint;
+  twelve_months?: TargetPoint;
+}
+
+export interface FinalData {
+  ticker: string;
+  company_name?: string;
+  current_price?: number;
+  day_change_pct?: number;
+  volatility?: number;
+  recommendation?: string;
+  verdict?: string;
+  quantitative_summary?: string;
+  time_horizon?: string;
+  confidence_score?: number;
+  risk_level?: string;
+  key_metrics?: KeyMetrics;
+  company_profile?: CompanyProfile;
+  financial_records?: FinancialRecord[];
+  technical_analysis?: TechnicalAnalysis;
+  technical_indicators?: TechnicalIndicators;
+  analyst_consensus?: AnalystConsensus;
+  data_quality?: DataQuality;
+  target_price?: number;
+  target_prices?: TargetPrices;
+  news_summary?: NewsArticle[];
+  reasoning?: string[];
+}
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 function formatLargeNumber(val: number | null | undefined): string {
-  if (val === null || val === undefined) return 'N/A';
-  if (Math.abs(val) >= 1e12) return `$${(val / 1e12).toFixed(2)}T`;
-  if (Math.abs(val) >= 1e9) return `$${(val / 1e9).toFixed(2)}B`;
-  if (Math.abs(val) >= 1e6) return `$${(val / 1e6).toFixed(2)}M`;
-  return `$${val.toFixed(0)}`;
+  if (val === null || val === undefined || Number.isNaN(Number(val))) return '—';
+  const numVal = Number(val);
+  const isNegative = numVal < 0;
+  const n = Math.abs(numVal);
+  const prefix = isNegative ? '-$' : '$';
+  if (n >= 1e12) return `${prefix}${(n / 1e12).toFixed(2)}T`;
+  if (n >= 1e9) return `${prefix}${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `${prefix}${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${prefix}${(n / 1e3).toFixed(1)}K`;
+  return `${prefix}${n.toFixed(0)}`;
 }
 
-function CustomTooltip({ active, payload, label }: any) {
-  if (!active || !payload || !payload.length) return null;
-  return (
-    <div className="rounded-xl border border-slate-700/50 bg-slate-900/95 px-4 py-3 shadow-xl backdrop-blur-sm">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-bold text-emerald-400">${Number(payload[0].value).toFixed(2)}</div>
-    </div>
-  );
+
+function formatNum(val: unknown, decimals = 2): string {
+  if (val === null || val === undefined || Number.isNaN(Number(val))) return '—';
+  return Number(val).toFixed(decimals);
 }
 
-const PIPE_NODES = [
-  { id: 'prefetch', label: 'Prefetch Data', icon: Database, cx: 300, cy: 40 },
-  { id: 'data', label: 'Market Data', icon: BarChart4, cx: 110, cy: 135 },
-  { id: 'news', label: 'News Analysis', icon: Newspaper, cx: 300, cy: 135 },
-  { id: 'analysis', label: 'Technicals', icon: Activity, cx: 490, cy: 135 },
-  { id: 'risk', label: 'Risk Officer', icon: ShieldAlert, cx: 300, cy: 230 },
-  { id: 'expert', label: 'Equity Expert', icon: Target, cx: 300, cy: 320 },
-  { id: 'complete', label: 'Assemble', icon: CheckCircle2, cx: 300, cy: 400 },
-];
+const EASE_OUT = [0.22, 1, 0.36, 1] as [number, number, number, number];
 
-const PIPE_EDGES = [
-  { from: 'prefetch', to: 'data' }, { from: 'prefetch', to: 'news' }, { from: 'prefetch', to: 'analysis' },
-  { from: 'data', to: 'risk' }, { from: 'news', to: 'risk' }, { from: 'analysis', to: 'risk' },
-  { from: 'risk', to: 'expert' }, { from: 'expert', to: 'complete' },
-];
+const pageIn = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.5, ease: EASE_OUT } },
+  exit: { opacity: 0, y: -10, transition: { duration: 0.25 } },
+};
 
-const NODE_W = 140, NODE_H = 50, NODE_R = 14;
+const staggerWrap = {
+  animate: { transition: { staggerChildren: 0.06, delayChildren: 0.08 } },
+};
 
-function edgePath(from: typeof PIPE_NODES[0], to: typeof PIPE_NODES[0]): string {
-  const x1 = from.cx, y1 = from.cy + NODE_H / 2;
-  const x2 = to.cx, y2 = to.cy - NODE_H / 2;
-  if (x1 === x2) return `M ${x1} ${y1} L ${x2} ${y2}`;
-  const midY = (y1 + y2) / 2;
-  return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
-}
+const fadeUp = {
+  initial: { opacity: 0, y: 24 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.45, ease: EASE_OUT } },
+};
 
-function WorkflowPipeline({ phases }: { phases: Record<string, PhaseStatus> }) {
-  const nodeMap = new Map(PIPE_NODES.map(n => [n.id, n]));
-
-  return (
-    <div className="mx-auto max-w-xl py-4">
-      <svg viewBox="0 0 600 430" className="w-full">
-        {PIPE_EDGES.map((e, i) => {
-          const fromNode = nodeMap.get(e.from)!;
-          const toNode = nodeMap.get(e.to)!;
-          const fromS = phases[e.from] || 'idle';
-          const toS = phases[e.to] || 'idle';
-          const active = fromS === 'done' || fromS === 'running';
-          const flowing = fromS === 'done' && toS === 'running';
-          const d = edgePath(fromNode, toNode);
-
-          return flowing ? (
-            <motion.path key={`e${i}`} d={d} fill="none" stroke="#22c55e" strokeWidth={2}
-              strokeDasharray="8 4" opacity={0.9}
-              animate={{ strokeDashoffset: [0, -24] }}
-              transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }} />
-          ) : active ? (
-            <path key={`e${i}`} d={d} fill="none" stroke="#22c55e" strokeWidth={1.5}
-              strokeDasharray="none" opacity={0.7} />
-          ) : (
-            <path key={`e${i}`} d={d} fill="none" stroke="#1e293b" strokeWidth={1.5}
-              strokeDasharray="4 4" opacity={0.4} />
-          );
-        })}
-
-        {PIPE_NODES.map(node => {
-          const status = phases[node.id] || 'idle';
-          const x = node.cx - NODE_W / 2, y = node.cy - NODE_H / 2;
-          const isRunning = status === 'running';
-          const isDone = status === 'done';
-
-          const fillColor = isRunning ? '#05140d' : isDone ? '#061a0e' : '#0c1220';
-          const strokeColor = isRunning ? '#22c55e' : isDone ? '#16a34a' : '#1e293b';
-          const textColor = isRunning ? '#22c55e' : isDone ? '#86efac' : '#475569';
-
-          return (
-            <g key={node.id}>
-              {isRunning ? (
-                <motion.rect
-                  x={x} y={y} width={NODE_W} height={NODE_H} rx={NODE_R}
-                  fill={fillColor} stroke={strokeColor} strokeWidth={2.5}
-                  animate={{
-                    stroke: ['#22c55e', '#4ade80', '#22c55e'],
-                  }}
-                  transition={{ repeat: Infinity, duration: 1, ease: 'easeInOut' }} />
-              ) : (
-                <rect x={x} y={y} width={NODE_W} height={NODE_H} rx={NODE_R}
-                  fill={fillColor} stroke={strokeColor} strokeWidth={1.5} />
-              )}
-              <text x={node.cx} y={node.cy + 2} textAnchor="middle" dominantBaseline="middle"
-                fill={textColor} fontSize={12.5} fontWeight={isRunning ? 700 : isDone ? 600 : 400}
-                fontFamily="system-ui, sans-serif">
-                {node.label}
-              </text>
-              {isDone && (
-                <text x={x + NODE_W - 16} y={y + 14} fill="#22c55e" fontSize={18}
-                  fontFamily="system-ui, sans-serif" fontWeight={700}>✓</text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
+const fadeScale = {
+  initial: { opacity: 0, scale: 0.96 },
+  animate: { opacity: 1, scale: 1, transition: { duration: 0.4, ease: EASE_OUT } },
+};
 
 export default function App() {
+  const { theme, toggleTheme } = useTheme();
   const [view, setView] = useState<ViewState>('landing');
   const [query, setQuery] = useState('');
-  const [tickers, setTickers] = useState<string[]>([]);
+const [tickers, setTickers] = useState<string[]>([]);
+  const [allTickersLoaded, setAllTickersLoaded] = useState(false);
+  const [tickerCount, setTickerCount] = useState(0);
   const [selectedTicker, setSelectedTicker] = useState('');
   const [data, setData] = useState<FinalData | null>(null);
   const [history, setHistory] = useState<{ date: string; price: number }[]>([]);
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
-  const [error, setError] = useState<string>('');
+  const [error, setError] = useState('');
   const [activePhases, setActivePhases] = useState<Record<string, PhaseStatus>>({
     prefetch: 'idle', data: 'idle', news: 'idle', analysis: 'idle',
     risk: 'idle', expert: 'idle', complete: 'idle',
   });
   const dataReceivedRef = useRef(false);
 
-  useEffect(() => {
-    axios.get(`${API_BASE}/tickers/search`).then((res) => setTickers(res.data)).catch(() => setTickers(['AAPL', 'NVDA', 'TSLA']));
+useEffect(() => {
+    axios.get(`${API_BASE}/tickers`)
+      .then((res) => {
+        const data = res.data;
+        setTickers(data.tickers || []);
+        setTickerCount(data.count || (data.tickers || []).length);
+        setAllTickersLoaded(true);
+      })
+      .catch(() => setTickers(['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'NFLX', 'CRM', 'ADBE', 'PYPL', 'UBER', 'COIN', 'INTC', 'DIS', 'BA', 'JPM', 'V', 'MA', 'WMT', 'KO', 'PEP', 'PFE', 'JNJ', 'XOM', 'CVX', 'GS', 'IBM', 'ORCL', 'CRM', 'NOW', 'SNOW', 'PLTR', 'RDDT', 'ARM', 'SMCI', 'DDOG', 'NET', 'FSLY']));
   }, []);
 
   const filteredTickers = useMemo(() => {
@@ -177,22 +240,21 @@ export default function App() {
     return q ? tickers.filter((t) => t.includes(q)) : tickers;
   }, [query, tickers]);
 
-  const MAX_VISIBLE = 120;
-  const visibleTickers = filteredTickers.slice(0, MAX_VISIBLE);
+  // When searching, show ALL matches. When browsing, show a scrollable subset.
+  const BROWSE_LIMIT = 500;
+  const visibleTickers = query.trim() ? filteredTickers : filteredTickers.slice(0, BROWSE_LIMIT);
 
-  const formatNum = (val: unknown, decimals = 2) => {
-    if (val === null || val === undefined || Number.isNaN(Number(val))) return 'N/A';
-    return Number(val).toFixed(decimals);
-  };
-
-  const handleSelectTicker = async (symbol: string) => {
+  const handleSelectTicker = useCallback(async (symbol: string) => {
     setSelectedTicker(symbol);
     setView('dashboard');
     setLoading(true);
     setError('');
     setData(null);
     setLogs([]);
-    setActivePhases({ prefetch: 'idle', data: 'idle', news: 'idle', analysis: 'idle', risk: 'idle', expert: 'idle', complete: 'idle' });
+    setActivePhases({
+      prefetch: 'idle', data: 'idle', news: 'idle', analysis: 'idle',
+      risk: 'idle', expert: 'idle', complete: 'idle',
+    });
     dataReceivedRef.current = false;
 
     try {
@@ -200,16 +262,24 @@ export default function App() {
       setHistory(histRes.data.history || []);
 
       const es = new EventSource(`${API_BASE}/analyze/stream/${symbol}`);
+      // Track last real-data activity to distinguish genuine disconnections
+      // from transient reconnects that happen after SSE keep-alive comments.
+      let lastActivity = Date.now();
 
       es.addEventListener('log', (e: MessageEvent) => {
+        lastActivity = Date.now();
         setLogs((prev) => [...prev.slice(-12), String(e.data)]);
       });
 
       es.addEventListener('phase', (e: MessageEvent) => {
+        lastActivity = Date.now();
         try {
           const payload = JSON.parse(String(e.data));
-          setActivePhases((prev) => ({ ...prev, [payload.step]: payload.status === 'done' ? 'done' : 'running' }));
-        } catch {}
+          setActivePhases((prev) => ({
+            ...prev,
+            [payload.step]: payload.status === 'done' ? 'done' : 'running',
+          }));
+        } catch { /* ignore */ }
       });
 
       es.addEventListener('final_result', (e: MessageEvent) => {
@@ -218,278 +288,974 @@ export default function App() {
           setData(JSON.parse(String(e.data)));
           setActivePhases((prev) => ({ ...prev, complete: 'done' }));
         } catch {
-          setError('The server returned data that could not be parsed as JSON.');
+          setError('Server returned data that could not be parsed.');
         } finally {
           setLoading(false);
           es.close();
         }
       });
 
-      es.onerror = () => {
+      es.addEventListener('error', (e: MessageEvent) => {
+        setError(String(e.data) || 'An error occurred during analysis.');
         setLoading(false);
         es.close();
-        if (!dataReceivedRef.current) {
-          setError('Stream closed before a final result was returned.');
+      });
+
+      es.onerror = () => {
+        // readyState 0 = CONNECTING (browser auto-reconnecting — normal for SSE keep-alives)
+        // readyState 1 = OPEN (still connected)
+        // readyState 2 = CLOSED (truly dead connection)
+        if (es.readyState === EventSource.CLOSED) {
+          setLoading(false);
+          es.close();
+          if (!dataReceivedRef.current) {
+            // Only show error if we've been idle for >5s (i.e., not a brief reconnect)
+            const idleMs = Date.now() - lastActivity;
+            if (idleMs > 5000) {
+              setError('Stream closed before final result was returned.');
+            }
+          }
         }
+        // If CONNECTING, the browser will retry automatically — do nothing
       };
     } catch (err: any) {
       setLoading(false);
       setError(err?.response?.data?.detail || err?.message || 'Failed to load ticker data.');
     }
-  };
+  }, []);
 
   const minPrice = history.length ? Math.min(...history.map((h) => h.price)) : 0;
   const maxPrice = history.length ? Math.max(...history.map((h) => h.price)) : 0;
+  const isPositive = Number(data?.day_change_pct || 0) >= 0;
+
+  const resetToSelect = () => {
+    setView('select');
+    setData(null);
+    setError('');
+    setLogs([]);
+  };
+
+  const animatedPrice = useAnimatedNumber(data?.current_price, 800, 2);
+  const animatedChange = useAnimatedNumber(data?.day_change_pct, 600, 2);
+  const animatedTarget = useAnimatedNumber(data?.target_price, 800, 2);
+  const animatedConfidence = useAnimatedNumber(data?.confidence_score ? data.confidence_score * 100 : undefined, 600, 1);
 
   return (
-    <div className="min-h-screen bg-[#05070a] text-slate-100">
+    <div className="aura-bg">
+
       {view === 'landing' && (
-        <div className="flex min-h-screen flex-col items-center justify-center px-6">
-          <div className="max-w-2xl text-center">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
-              <Activity size={16} /> Financial intelligence dashboard
-            </div>
-            <h1 className="mb-5 text-5xl font-black tracking-tight md:text-7xl">STOCK INTELLIGENCE</h1>
-            <p className="mx-auto mb-8 max-w-xl text-slate-400">
-              Streamed market data, technical analysis, news sentiment, and a final investment verdict in one view.
-            </p>
-            <button onClick={() => setView('select')} className="rounded-full bg-emerald-500 px-8 py-3 font-bold text-black transition hover:bg-emerald-400">
-              Access System
-            </button>
-          </div>
-        </div>
-      )}
+        <div
+          style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 10 }}
+        >
+            <ThreeHero />
 
-      {view === 'select' && (
-        <div className="mx-auto max-w-4xl px-6 py-10">
-          <div className="mb-6 flex items-center justify-between gap-4">
-            <button onClick={() => setView('landing')} className="rounded-full border border-slate-800 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600">Back</button>
-            <div className="text-sm text-slate-500">Choose a ticker to start analysis</div>
-          </div>
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6 shadow-2xl shadow-black/20">
-            <div className="mb-4 flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3">
-              <Search size={18} className="text-slate-500" />
-              <input className="w-full bg-transparent text-slate-100 outline-none placeholder:text-slate-500" placeholder="Search ticker symbol..." value={query} onChange={(e) => setQuery(e.target.value)} />
-            </div>
-            <div className="mb-2 text-xs text-slate-500">
-              {filteredTickers.length > MAX_VISIBLE ? `Showing ${MAX_VISIBLE} of ${filteredTickers.length} tickers — type to narrow results` : `${filteredTickers.length} tickers available`}
-            </div>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              {visibleTickers.map((symbol) => (
-                <button key={symbol} onClick={() => handleSelectTicker(symbol)} className="rounded-2xl border border-slate-800 bg-slate-950 px-4 py-5 text-left transition hover:-translate-y-0.5 hover:border-emerald-500/40 hover:bg-slate-900">
-                  <div className="text-lg font-bold">{symbol}</div>
-                  <div className="text-xs text-slate-500">Run analysis</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+            <motion.div
+              variants={staggerWrap}
+              initial="initial"
+              animate="animate"
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '80px 24px 60px',
+                position: 'relative',
+                zIndex: 10,
+              }}
+            >
+              <div style={{ maxWidth: 720, width: '100%', textAlign: 'center' }}>
+                <motion.div variants={fadeUp} style={{ marginBottom: 32 }}>
+                  <div className="eyebrow-badge">
+                    <motion.span
+                      style={{
+                        width: 6, height: 6, borderRadius: '50%',
+                        background: 'var(--accent)', display: 'inline-block',
+                      }}
+                      animate={{ opacity: [1, 0.3, 1] }}
+                      transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
+                    />
+                    AI-POWERED EQUITY INTELLIGENCE
+                  </div>
+                </motion.div>
 
-      {view === 'dashboard' && (
-        <div className="mx-auto max-w-7xl px-6 py-8">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-            <button onClick={() => { setView('select'); setData(null); setError(''); setLogs([]); }} className="rounded-full border border-slate-800 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600">Change ticker</button>
-            <div className="text-sm text-slate-500">{selectedTicker ? `Analyzing ${selectedTicker}` : 'No ticker selected'}</div>
-          </div>
+                <motion.h1
+                  variants={fadeUp}
+                  style={{
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: 'clamp(48px, 8vw, 88px)',
+                    fontWeight: 800,
+                    letterSpacing: '-0.03em',
+                    lineHeight: 0.95,
+                    color: 'var(--text-primary)',
+                    marginBottom: 32,
+                    textShadow: '0 0 80px rgba(0,0,0,0.5)',
+                  }}
+                >
+                  STOCK
+                  <br />
+                  <span style={{ color: 'var(--accent)' }}>INTELLIGENCE</span>
+                </motion.h1>
 
-          {loading && (
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-              <div className="mb-4 flex items-center gap-2">
-                <Zap size={18} className="text-emerald-400" />
-                <span className="text-lg font-bold">Agent pipeline</span>
-                <span className="text-xs text-slate-500 ml-2">{selectedTicker}</span>
-              </div>
-              <WorkflowPipeline phases={activePhases} />
-              {logs.length > 0 && (
-                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950 p-4 max-h-32 overflow-auto">
-                  <div className="text-xs text-slate-500 mb-2">Live feed</div>
-                  {logs.slice(-6).map((line, idx) => (
-                    <div key={idx} className="text-xs text-slate-400 py-0.5">{line}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                <motion.p
+                  variants={fadeUp}
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 13,
+                    color: 'var(--text-secondary)',
+                    letterSpacing: '0.04em',
+                    marginBottom: 48,
+                    lineHeight: 2,
+                  }}
+                >
+                  &gt; Multi-agent pipeline — market data, sentiment analysis,
+                  <br />
+                  technical signals &amp; equity verdict streamed live._
+                  <motion.span
+                    style={{ display: 'inline-block', width: 7, height: 13, background: 'var(--accent)', marginLeft: 4, verticalAlign: 'middle', borderRadius: 1 }}
+                    animate={{ opacity: [1, 0, 1] }}
+                    transition={{ repeat: Infinity, duration: 0.9 }}
+                  />
+                </motion.p>
 
-          {error && (
-            <div className="mb-6 rounded-3xl border border-red-900/50 bg-red-950/20 p-5 text-red-200">{error}</div>
-          )}
+                <motion.div variants={fadeUp}>
+                  <motion.button
+                    className="cta-btn"
+                    onClick={() => setView('select')}
+                    whileHover={{ scale: 1.03, y: -1 }}
+                    whileTap={{ scale: 0.97 }}
+                  >
+                    INITIALIZE SYSTEM
+                    <ChevronRight size={16} />
+                  </motion.button>
+                </motion.div>
 
-          {data && (
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-              <div className="space-y-8 lg:col-span-2">
-                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                  <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                      <div className="text-sm uppercase tracking-widest text-slate-500">Equity dossier</div>
-                      <h2 className="mt-1 text-3xl font-black">{data.ticker} {data.company_name ? `- ${data.company_name}` : ''}</h2>
-                      {data.company_profile?.sector && (<div className="mt-1 text-xs text-slate-500">{data.company_profile.industry || data.company_profile.sector}</div>)}
-                    </div>
-                    <div className="rounded-2xl border border-slate-800 bg-slate-950 px-5 py-3">
-                      <div className="text-xs uppercase text-slate-500">Current price</div>
-                      <div className="text-2xl font-bold">${formatNum(data.current_price)}</div>
-                      <div className={`text-sm flex items-center gap-1 ${Number(data.day_change_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {Number(data.day_change_pct || 0) >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                        {formatNum(data.day_change_pct)}%
+                <motion.div
+                  variants={fadeUp}
+                  style={{
+                    marginTop: 64,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: 60,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  {[
+                    { value: '7', label: 'AGENTS' },
+                    { value: '4+', label: 'DATA SOURCES' },
+                    { value: '<30s', label: 'LATENCY' },
+                  ].map((stat) => (
+                    <div key={stat.label} style={{ textAlign: 'center' }}>
+                      <div style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 28, fontWeight: 700, color: 'var(--accent)',
+                        textShadow: '0 0 30px var(--accent-glow)',
+                      }}>
+                        {stat.value}
+                      </div>
+                      <div style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 10, letterSpacing: '0.22em',
+                        color: 'var(--text-muted)', marginTop: 6,
+                      }}>
+                        {stat.label}
                       </div>
                     </div>
-                  </div>
-                  <div className="h-[340px] mt-2">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={history} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#22c55e" stopOpacity={0.35} />
-                            <stop offset="50%" stopColor="#22c55e" stopOpacity={0.12} />
-                            <stop offset="100%" stopColor="#22c55e" stopOpacity={0.02} />
-                          </linearGradient>
-                          <linearGradient id="strokeGradient" x1="0" y1="0" x2="1" y2="0">
-                            <stop offset="0%" stopColor="#16a34a" /><stop offset="100%" stopColor="#22c55e" />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" strokeOpacity={0.6} />
-                        <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickLine={{ stroke: '#334155' }} axisLine={{ stroke: '#334155' }} tickFormatter={(v: string) => v.slice(5)} />
-                        <YAxis tick={{ fill: '#64748b', fontSize: 11 }} tickLine={{ stroke: '#334155' }} axisLine={{ stroke: '#334155' }} domain={[minPrice * 0.98, maxPrice * 1.02]} tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
-                        <Tooltip content={<CustomTooltip />} />
-                        {data.technical_analysis?.support && (<ReferenceLine y={data.technical_analysis.support} stroke="#f59e0b" strokeDasharray="6 3" strokeOpacity={0.6} label={{ value: 'Support', fill: '#f59e0b', fontSize: 10, position: 'insideBottomLeft' }} />)}
-                        {data.technical_analysis?.resistance && (<ReferenceLine y={data.technical_analysis.resistance} stroke="#ef4444" strokeDasharray="6 3" strokeOpacity={0.6} label={{ value: 'Resistance', fill: '#ef4444', fontSize: 10, position: 'insideTopLeft' }} />)}
-                        <Area type="monotone" dataKey="price" stroke="url(#strokeGradient)" strokeWidth={2.5} fill="url(#priceGradient)" dot={false} activeDot={{ r: 5, fill: '#22c55e', stroke: '#05070a', strokeWidth: 2 }} />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+                  ))}
+                </motion.div>
+              </div>
+            </motion.div>
 
-                {(data.company_profile || (data.financial_records && data.financial_records.length > 0)) && (
-                  <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                    <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Building2 size={18} />Company overview &amp; financials</div>
-                    {data.company_profile && (
-                      <>
-                        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4 text-sm">
-                          {data.company_profile.sector && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="text-xs text-slate-500">Sector</div><div className="font-semibold">{data.company_profile.sector}</div></div>)}
-                          {data.company_profile.industry && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="text-xs text-slate-500">Industry</div><div className="font-semibold">{data.company_profile.industry}</div></div>)}
-                          {data.company_profile.full_time_employees && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-center gap-1 text-xs text-slate-500"><Users size={12} /> Employees</div><div className="font-semibold">{data.company_profile.full_time_employees.toLocaleString()}</div></div>)}
-                          {data.company_profile.country && (<div className="rounded-2xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-center gap-1 text-xs text-slate-500"><Globe size={12} /> HQ</div><div className="font-semibold">{data.company_profile.city ? `${data.company_profile.city}, ` : ''}{data.company_profile.country}</div></div>)}
+            <TickerStrip />
+
+            <div className="status-bar">
+              <span>SYS::ONLINE</span>
+              <span style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <motion.span
+                  style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block' }}
+                  animate={{ opacity: [1, 0.3, 1] }}
+                  transition={{ repeat: Infinity, duration: 1.4 }}
+                />
+                READY
+              </span>
+              <span>v2.0.0</span>
+            </div>
+          </div>
+        )}
+
+        {view === 'select' && (
+          <div
+            style={{
+              maxWidth: 1080, margin: '0 auto',
+              padding: '48px 24px 80px',
+              position: 'relative', zIndex: 10,
+              minHeight: '100vh',
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, flexWrap: 'wrap', gap: 12 }}
+            >
+              <button className="back-btn" onClick={() => setView('landing')}>
+                <ArrowLeft size={14} /> BACK
+              </button>
+              <span style={{
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                letterSpacing: '0.18em', color: 'var(--text-muted)',
+              }}>
+                &gt; SELECT_TICKER /
+                <span style={{ color: 'var(--accent)' }}> {tickerCount} TOTAL · {filteredTickers.length} MATCHED</span>
+              </span>
+              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+              className="terminal-input"
+              style={{ marginBottom: 20, maxWidth: 720, margin: '0 auto 20px' }}
+            >
+              <span style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14, color: 'var(--accent)', userSelect: 'none',
+              }}>$</span>
+              <Search size={15} style={{ color: 'var(--text-muted)' }} />
+              <input
+                placeholder="Search ticker symbol..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Search ticker symbol"
+              />
+              <span style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.1em',
+                userSelect: 'none',
+              }}>
+                {query.trim() ? `${filteredTickers.length} found` : `${tickerCount} total`}
+              </span>
+            </motion.div>
+
+            {visibleTickers.length > 0 ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+                  gap: 10,
+                  maxHeight: query.trim() ? '70vh' : '60vh',
+                  overflowY: 'auto',
+                  paddingRight: 8,
+                  scrollbarWidth: 'thin',
+                }}
+              >
+                {visibleTickers.map((symbol) => (
+                  <button
+                    key={symbol}
+                    className="void-card void-card-interactive"
+                    onClick={() => handleSelectTicker(symbol)}
+                    style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4 }}
+                  >
+                    <div style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 15, fontWeight: 700,
+                      color: 'var(--text-primary)',
+                    }}>
+                      {symbol}
+                    </div>
+                    <div style={{
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: 10, letterSpacing: '0.2em',
+                      color: 'var(--text-muted)', textTransform: 'uppercase',
+                    }}>
+                      Analyze
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="NO TICKERS FOUND" icon="search" />
+            )}
+
+            {!query.trim() && filteredTickers.length > BROWSE_LIMIT && (
+              <div style={{
+                textAlign: 'center', marginTop: 16,
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                color: 'var(--text-muted)', letterSpacing: '0.1em',
+              }}>
+                Showing {BROWSE_LIMIT} of {tickerCount} tickers — type to search for any ticker
+              </div>
+            )}
+
+            <div className="status-bar">
+              <span>SYS::ONLINE</span>
+              <span style={{ color: 'var(--accent)' }}>● READY</span>
+              <span>v2.0.0</span>
+</div>
+          </div>
+        )}
+
+        {view === 'dashboard' && (
+          <div
+            style={{
+              maxWidth: 1400, margin: '0 auto',
+              padding: '32px 24px 80px',
+              position: 'relative', zIndex: 10,
+              minHeight: '100vh',
+            }}
+          >
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', marginBottom: 24,
+              flexWrap: 'wrap', gap: 12,
+            }}>
+              <button className="back-btn" onClick={resetToSelect}>
+                <ArrowLeft size={14} /> CHANGE TICKER
+              </button>
+
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 11, letterSpacing: '0.16em', color: 'var(--text-secondary)',
+              }}>
+                {loading && (
+                  <motion.span
+                    style={{
+                      width: 6, height: 6, borderRadius: '50%',
+                      background: 'var(--accent)', display: 'inline-block',
+                    }}
+                    animate={{ opacity: [1, 0.3, 1] }}
+                    transition={{ repeat: Infinity, duration: 0.8 }}
+                  />
+                )}
+                {selectedTicker
+                  ? `ANALYZING :: ${selectedTicker}`
+                  : 'NO TICKER SELECTED'}
+              </div>
+
+              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+            </div>
+
+            {loading && (
+              <div
+                className="pipeline-wrap"
+                style={{ marginBottom: 24 }}
+              >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
+                    <Zap size={16} style={{ color: 'var(--accent)' }} />
+                    <span style={{
+                      fontFamily: "'Inter', sans-serif", fontSize: 17,
+                      fontWeight: 700, letterSpacing: '0.05em', color: 'var(--text-primary)',
+                    }}>
+                      AGENT PIPELINE
+                    </span>
+                    <span style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 11, letterSpacing: '0.1em', color: 'var(--text-secondary)',
+                    }}>
+                      {selectedTicker}
+                    </span>
+                  </div>
+
+                  <WorkflowPipeline phases={activePhases} />
+
+                  {logs.length > 0 && (
+                    <div
+                      className="log-container"
+                      style={{ marginTop: 24 }}
+                    >
+                      <div style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 9, letterSpacing: '0.22em',
+                        color: 'var(--text-muted)', marginBottom: 10,
+                      }}>
+                        LIVE FEED
+                      </div>
+
+                      {logs.slice(-7).map((line, idx, arr) => (
+                        <div key={idx} className="log-line">
+                          <span className="log-prompt">&gt;</span>
+                          {line}
+                          {idx === arr.length - 1 && (
+                            <motion.span
+                              style={{
+                                display: 'inline-block', background: 'var(--accent)',
+                                width: 7, height: 13, marginLeft: 5,
+                                verticalAlign: 'middle', borderRadius: 1,
+                              }}
+                              animate={{ opacity: [1, 0, 1] }}
+                              transition={{ repeat: Infinity, duration: 0.9 }}
+                            />
+                          )}
                         </div>
-                        {data.company_profile.business_summary && (<div className="mb-6 rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm leading-6 text-slate-300">{data.company_profile.business_summary}</div>)}
-                        {data.company_profile.website && (<a href={data.company_profile.website} target="_blank" rel="noopener noreferrer" className="mb-4 inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition"><ExternalLink size={12} />{data.company_profile.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</a>)}
-                      </>
-                    )}
-                    {data.financial_records && data.financial_records.length > 0 && (
-                      <>
-                        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-400"><FileText size={14} />SEC financial records{data.financial_records[0]?.source && (<span className="text-xs text-slate-600">({data.financial_records[0].source})</span>)}</div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead><tr className="border-b border-slate-800">
-                              <th className="pb-2 pr-4 text-left text-xs text-slate-500">Period</th>
-                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Revenue</th>
-                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Net Income</th>
-                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Gross Profit</th>
-                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Total Assets</th>
-                              <th className="pb-2 pr-4 text-right text-xs text-slate-500">Total Debt</th>
-                              <th className="pb-2 text-right text-xs text-slate-500">Cash Flow</th>
-                            </tr></thead>
-                            <tbody>{data.financial_records.map((rec) => (
-                              <tr key={rec.period} className="border-b border-slate-800/50">
-                                <td className="py-2.5 pr-4 font-mono text-xs text-slate-400">{rec.period}</td>
-                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.revenue)}</td>
-                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.net_income)}</td>
-                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.gross_profit)}</td>
-                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.total_assets)}</td>
-                                <td className="py-2.5 pr-4 text-right font-semibold">{formatLargeNumber(rec.total_debt)}</td>
-                                <td className="py-2.5 text-right font-semibold">{formatLargeNumber(rec.operating_cash_flow)}</td>
-                              </tr>
-                            ))}</tbody>
-                          </table>
-                        </div>
-                      </>
-                    )}
+                      ))}
                   </div>
                 )}
+              </div>
+            )}
 
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                    <div className="mb-4 flex items-center gap-2 text-lg font-bold"><BarChart4 size={18} />Technical analysis</div>
-                    <div className="space-y-3 text-sm text-slate-300">
-                      <div className="flex justify-between"><span>Trend</span><span className="font-semibold">{data.technical_analysis?.trend || 'N/A'}</span></div>
-                      <div className="flex justify-between"><span>Volatility</span><span className="font-semibold">{formatNum(data.technical_analysis?.volatility)}</span></div>
-                      <div className="flex justify-between"><span>Support</span><span className="font-semibold text-amber-400">${formatNum(data.technical_analysis?.support)}</span></div>
-                      <div className="flex justify-between"><span>Resistance</span><span className="font-semibold text-red-400">${formatNum(data.technical_analysis?.resistance)}</span></div>
-                    </div>
-                  </div>
-                  <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                    <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Target size={18} />Risk / conviction</div>
-                    <div className="space-y-3 text-sm text-slate-300">
-                      <div className="flex justify-between"><span>Recommendation</span><span className="font-semibold text-emerald-400">{data.recommendation || 'N/A'}</span></div>
-                      <div className="flex justify-between"><span>Risk level</span><span className="font-semibold">{data.risk_level || 'N/A'}</span></div>
-                      <div className="flex justify-between"><span>Confidence</span><span className="font-semibold">{formatNum(data.confidence_score)}%</span></div>
-                      <div className="flex justify-between"><span>Horizon</span><span className="font-semibold">{data.time_horizon || 'N/A'}</span></div>
-                    </div>
-                  </div>
+            {loading && !data && (
+              <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  <SkeletonCard height={420} />
+                  <SkeletonCard height={300} />
                 </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <SkeletonCard height={180} />
+                  <SkeletonCard height={320} />
+                </div>
+              </div>
+            )}
 
-                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                  <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Newspaper size={18} />News summary</div>
-                  <div className="space-y-4">
-                    {(data.news_summary || []).slice(0, 5).map((article, idx) => (
-                      <div key={`${article.title}-${idx}`} className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="font-semibold text-slate-100">{article.title || 'Untitled'}</div>
-                          <span className={`rounded-full border px-2 py-0.5 text-xs ${SENTIMENT_COLORS[article.sentiment] || SENTIMENT_COLORS.Neutral}`}>{article.sentiment || 'Neutral'}</span>
+            {error && (
+              <div
+                style={{
+                  background: 'rgba(244,63,94,0.06)',
+                  border: '1px solid rgba(244,63,94,0.2)',
+                  borderRadius: 12, padding: '14px 20px', marginBottom: 24,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 13, color: '#f43f5e', letterSpacing: '0.04em',
+                }}
+              >
+                <span style={{ marginRight: 8, opacity: 0.6 }}>ERROR::</span>
+                {error}
+              </div>
+            )}
+
+            {data && (
+              <motion.div
+                variants={staggerWrap}
+                initial="initial"
+                animate="animate"
+                className="dashboard-grid"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 300px',
+                  gap: 20, alignItems: 'start',
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  <motion.div variants={fadeUp} className="void-card">
+                    <div style={{
+                      display: 'flex', justifyContent: 'space-between',
+                      alignItems: 'flex-start', flexWrap: 'wrap',
+                      gap: 16, marginBottom: 24,
+                    }}>
+                      <div>
+                        <div className="section-label" style={{ marginBottom: 8 }}>
+                          EQUITY DOSSIER
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                          <span>{article.source || 'Unknown'}</span>
-                          {article.date && <span>• {article.date}</span>}
-                          {article.url && (<a href={article.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-blue-400 hover:text-blue-300"><ExternalLink size={10} />link</a>)}
-                        </div>
-                        <p className="mt-3 text-sm leading-5 text-slate-300">{article.summary || 'No summary available.'}</p>
+                        <h2 style={{
+                          fontFamily: "'Inter', sans-serif", fontSize: 30,
+                          fontWeight: 800, letterSpacing: '-0.025em',
+                          color: 'var(--text-primary)', lineHeight: 1, marginBottom: 5,
+                        }}>
+                          {data.ticker}
+                          {data.company_name && (
+                            <span style={{
+                              color: 'var(--text-secondary)', fontWeight: 600,
+                              fontSize: 18, marginLeft: 10,
+                            }}>
+                              {data.company_name}
+                            </span>
+                          )}
+                        </h2>
+                        {(data.company_profile?.sector || data.company_profile?.industry) && (
+                          <div style={{
+                            fontFamily: "'JetBrains Mono', monospace",
+                            fontSize: 11, letterSpacing: '0.1em', color: 'var(--text-muted)',
+                          }}>
+                            {[data.company_profile.sector, data.company_profile.industry]
+                              .filter(Boolean).join(' / ')}
+                          </div>
+                        )}
                       </div>
-                    ))}
-                    {(!data.news_summary || data.news_summary.length === 0) && (<div className="text-sm text-slate-500">No news items returned for this ticker.</div>)}
-                  </div>
+
+                      <div style={{
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 12, padding: '14px 20px', minWidth: 148,
+                      }}>
+                        <div className="section-label" style={{ marginBottom: 7 }}>
+                          CURRENT PRICE
+                        </div>
+                        <div style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 28, fontWeight: 700,
+                          color: 'var(--text-primary)', lineHeight: 1,
+                        }}>
+                          ${animatedPrice}
+                        </div>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 4,
+                          marginTop: 7,
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 13, fontWeight: 600,
+                          color: isPositive ? 'var(--gain)' : 'var(--loss)',
+                        }}>
+                          {isPositive ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                          {isPositive ? '+' : ''}{animatedChange}%
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ height: 310 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={history} margin={{ top: 10, right: 4, left: 0, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#00d975" stopOpacity={0.22} />
+                              <stop offset="55%" stopColor="#00d975" stopOpacity={0.06} />
+                              <stop offset="100%" stopColor="#00d975" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="2 6" stroke="rgba(var(--border-rgb), 0.04)" />
+                          <XAxis
+                            dataKey="date"
+                            tick={{ fill: 'var(--text-muted)', fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}
+                            tickLine={false} axisLine={false}
+                            tickFormatter={(v: string) => v?.slice(5) || ''}
+                          />
+                          <YAxis
+                            tick={{ fill: 'var(--text-muted)', fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}
+                            tickLine={false} axisLine={false}
+                            domain={[minPrice * 0.98, maxPrice * 1.02]}
+                            tickFormatter={(v: number) => `$${v?.toFixed(0) || 0}`}
+                            width={58}
+                          />
+                          <Tooltip content={<CustomTooltip />} />
+                          {data.technical_analysis?.support && (
+                            <ReferenceLine
+                              y={data.technical_analysis.support}
+                              stroke="#f59e0b" strokeDasharray="4 5" strokeOpacity={0.55}
+                              label={{ value: 'S', fill: '#f59e0b', fontSize: 9, fontFamily: "'JetBrains Mono', monospace", position: 'insideBottomLeft' }}
+                            />
+                          )}
+                          {data.technical_analysis?.resistance && (
+                            <ReferenceLine
+                              y={data.technical_analysis.resistance}
+                              stroke="#f43f5e" strokeDasharray="4 5" strokeOpacity={0.55}
+                              label={{ value: 'R', fill: '#f43f5e', fontSize: 9, fontFamily: "'JetBrains Mono', monospace", position: 'insideTopLeft' }}
+                            />
+                          )}
+                          <Area
+                            type="monotone" dataKey="price"
+                            stroke="#00d975" strokeWidth={2}
+                            fill="url(#priceGrad)" dot={false}
+                            activeDot={{ r: 4, fill: '#00d975', stroke: 'var(--void)', strokeWidth: 2 }}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </motion.div>
+
+                  {(data.company_profile || (data.financial_records && data.financial_records.length > 0)) && (
+                    <motion.div variants={fadeUp} className="void-card">
+                      <SectionHeader icon={<Building2 size={14} />} label="COMPANY OVERVIEW & FINANCIALS" />
+
+                      {data.company_profile && (
+                        <>
+                          <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gap: 8, marginBottom: 16,
+                          }}>
+                            {[
+                              { label: 'SECTOR', value: data.company_profile.sector },
+                              { label: 'INDUSTRY', value: data.company_profile.industry },
+                              { label: 'EMPLOYEES', value: data.company_profile.full_time_employees?.toLocaleString() },
+                              {
+                                label: 'HQ',
+                                value: data.company_profile.city
+                                  ? `${data.company_profile.city}, ${data.company_profile.country}`
+                                  : data.company_profile.country,
+                              },
+                            ].filter((i) => i.value).map((item) => (
+                              <DataCell key={item.label} label={item.label} value={item.value} />
+                            ))}
+                          </div>
+
+                          {data.company_profile.business_summary && (
+                            <div style={{
+                              background: 'var(--surface)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 10, padding: '14px 16px',
+                              fontFamily: "'Inter', sans-serif",
+                              fontSize: 13, lineHeight: 1.75, color: 'var(--text-secondary)',
+                              marginBottom: 14,
+                            }}>
+                              {data.company_profile.business_summary}
+                            </div>
+                          )}
+
+                          {data.company_profile.website && (
+                            <a
+                              href={data.company_profile.website}
+                              target="_blank" rel="noopener noreferrer"
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 5,
+                                fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                                color: 'var(--info)', textDecoration: 'none',
+                                marginBottom: 20, letterSpacing: '0.05em',
+                              }}
+                            >
+                              <ExternalLink size={11} />
+                              {data.company_profile.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}
+                            </a>
+                          )}
+                        </>
+                      )}
+
+                      {data.financial_records && data.financial_records.length > 0 && (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                            <FileText size={12} style={{ color: 'var(--text-muted)' }} />
+                            <span className="section-label">SEC FINANCIAL RECORDS</span>
+                            {data.financial_records[0]?.source && (
+                              <span style={{
+                                fontFamily: "'JetBrains Mono', monospace",
+                                fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.1em',
+                              }}>
+                                ({data.financial_records[0].source})
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ overflowX: 'auto' }}>
+                            <table className="fin-table">
+                              <thead>
+                                <tr>
+                                  {['PERIOD', 'REVENUE', 'NET INCOME', 'GROSS PROFIT', 'TOTAL ASSETS', 'TOTAL DEBT', 'CASH FLOW']
+                                    .map((h) => <th key={h}>{h}</th>)}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {data.financial_records.map((rec) => (
+                                  <tr key={rec.period}>
+                                    <td>{rec.period}</td>
+                                    {[rec.revenue, rec.net_income, rec.gross_profit,
+                                      rec.total_assets, rec.total_debt, rec.operating_cash_flow
+                                    ].map((v, i) => (
+                                      <td key={i}>{formatLargeNumber(v)}</td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </motion.div>
+                  )}
+
+                  <motion.div
+                    variants={fadeUp}
+                    style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}
+                  >
+                    <div className="void-card">
+                      <SectionHeader icon={<BarChart4 size={14} />} label="TECHNICAL ANALYSIS" />
+                      <div>
+                        <MetricRow label="TREND" value={data.technical_analysis?.trend} />
+                        <MetricRow label="MOMENTUM" value={data.technical_analysis?.momentum} />
+                        <MetricRow label="VOLATILITY" value={formatNum(data.technical_analysis?.volatility)} />
+                        <MetricRow
+                          label="SUPPORT"
+                          value={`$${formatNum(data.technical_analysis?.support)}`}
+                          color="#f59e0b"
+                        />
+                        <MetricRow
+                          label="RESISTANCE"
+                          value={`$${formatNum(data.technical_analysis?.resistance)}`}
+                          color="#f43f5e"
+                        />
+                      </div>
+
+                      {data.technical_indicators && (
+                        <>
+                          <div style={{ borderTop: '1px solid var(--border)', margin: '14px 0 12px' }} />
+                          <div className="section-label" style={{ marginBottom: 10 }}>LIVE INDICATORS</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 12px' }}>
+                            {[
+                              { label: 'SMA-20', value: data.technical_indicators.sma_20 ? `$${formatNum(data.technical_indicators.sma_20)}` : '—', sub: data.technical_indicators.price_vs_sma20 },
+                              { label: 'SMA-50', value: data.technical_indicators.sma_50 ? `$${formatNum(data.technical_indicators.sma_50)}` : '—', sub: data.technical_indicators.price_vs_sma50 },
+                              { label: 'MACD', value: data.technical_indicators.macd_line ? formatNum(data.technical_indicators.macd_line, 3) : '—', sub: data.technical_indicators.macd_crossover },
+                              { label: 'BB POS', value: data.technical_indicators.bb_position !== undefined ? `${Math.max(0, (data.technical_indicators.bb_position * 100)).toFixed(0)}%` : '—', sub: data.technical_indicators.bb_position !== undefined && data.technical_indicators.bb_position < 0 ? 'BELOW BAND' : undefined },
+                            ].map((ind) => (
+                              <div key={ind.label} style={{
+                                background: 'var(--surface)', borderRadius: 8,
+                                padding: '7px 10px',
+                              }}>
+                                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.14em', color: 'var(--text-muted)', marginBottom: 3 }}>{ind.label}</div>
+                                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{ind.value}</div>
+                                {ind.sub && <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: ind.sub === 'Bullish' || ind.sub === 'above' ? 'var(--gain)' : ind.sub === 'Bearish' || ind.sub === 'below' ? 'var(--loss)' : 'var(--text-muted)', marginTop: 2, letterSpacing: '0.1em' }}>{ind.sub.toUpperCase()}</div>}
+                              </div>
+                            ))}
+                          </div>
+
+                          {data.technical_indicators.rsi_14 !== undefined && (
+                            <div style={{ marginTop: 12 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>RSI-14</span>
+                                <span style={{
+                                  fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700,
+                                  color: (data.technical_indicators.rsi_14 ?? 50) >= 70 ? 'var(--loss)' : (data.technical_indicators.rsi_14 ?? 50) <= 30 ? 'var(--gain)' : 'var(--accent)',
+                                }}>
+                                  {formatNum(data.technical_indicators.rsi_14, 1)} · {data.technical_indicators.rsi_signal}
+                                </span>
+                              </div>
+                              <div style={{ height: 6, background: 'var(--surface)', borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{
+                                  height: '100%',
+                                  width: `${Math.min(100, data.technical_indicators.rsi_14 ?? 50)}%`,
+                                  background: (data.technical_indicators.rsi_14 ?? 50) >= 70
+                                    ? 'linear-gradient(90deg, #f59e0b, #f43f5e)'
+                                    : (data.technical_indicators.rsi_14 ?? 50) <= 30
+                                    ? 'linear-gradient(90deg, #00d975, #38bdf8)'
+                                    : 'linear-gradient(90deg, var(--accent), #38bdf8)',
+                                  borderRadius: 3,
+                                  transition: 'width 0.6s ease',
+                                }} />
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: 'var(--gain)' }}>OVERSOLD 30</span>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: 'var(--loss)' }}>70 OVERBOUGHT</span>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    <div className="void-card">
+                      <SectionHeader icon={<Target size={14} />} label="RISK / CONVICTION" />
+                      <div>
+                        <MetricRow
+                          label="RECOMMENDATION"
+                          value={data.recommendation}
+                          color="var(--accent)"
+                        />
+                        <MetricRow label="RISK LEVEL" value={data.risk_level} />
+                        <MetricRow
+                          label="CONFIDENCE"
+                          value={`${animatedConfidence}%`}
+                        />
+                        <MetricRow label="HORIZON" value={data.time_horizon} />
+                      </div>
+                    </div>
+                  </motion.div>
+
+                  <motion.div variants={fadeUp} className="void-card">
+                    <SectionHeader icon={<Newspaper size={14} />} label="NEWS FEED" />
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {(data.news_summary || []).slice(0, 5).map((article, idx) => (
+                        <NewsCard key={`${article.title}-${idx}`} article={article} />
+                      ))}
+
+                      {(!data.news_summary || data.news_summary.length === 0) && (
+                        <EmptyState title="NO NEWS ITEMS FOR THIS TICKER" icon="news" />
+                      )}
+                    </div>
+                  </motion.div>
+
+                  <motion.div variants={fadeUp} className="void-card">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+                      <SectionHeader icon={<Info size={14} />} label="VERDICT" />
+                      {data.data_quality && (
+                        <div style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          padding: '4px 10px', borderRadius: 20,
+                          border: `1px solid ${
+                            data.data_quality.level === 'Very High' || data.data_quality.level === 'High'
+                              ? 'rgba(0,217,117,0.3)'
+                              : data.data_quality.level === 'Medium'
+                              ? 'rgba(245,158,11,0.3)'
+                              : 'rgba(244,63,94,0.3)'
+                          }`,
+                          background:
+                            data.data_quality.level === 'Very High' || data.data_quality.level === 'High'
+                              ? 'rgba(0,217,117,0.06)'
+                              : data.data_quality.level === 'Medium'
+                              ? 'rgba(245,158,11,0.06)'
+                              : 'rgba(244,63,94,0.06)',
+                        }}>
+                          <span style={{
+                            width: 5, height: 5, borderRadius: '50%',
+                            background:
+                              data.data_quality.level === 'Very High' || data.data_quality.level === 'High'
+                                ? 'var(--gain)'
+                                : data.data_quality.level === 'Medium'
+                                ? '#f59e0b'
+                                : 'var(--loss)',
+                            display: 'inline-block',
+                          }} />
+                          <span style={{
+                            fontFamily: "'JetBrains Mono', monospace", fontSize: 9,
+                            letterSpacing: '0.14em',
+                            color:
+                              data.data_quality.level === 'Very High' || data.data_quality.level === 'High'
+                                ? 'var(--gain)'
+                                : data.data_quality.level === 'Medium'
+                                ? '#f59e0b'
+                                : 'var(--loss)',
+                          }}>
+                            {data.data_quality.label?.toUpperCase()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <p style={{
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: 14, lineHeight: 1.85, color: 'var(--text-secondary)', margin: 0,
+                    }}>
+                      {data.verdict || 'No verdict returned.'}
+                    </p>
+                    {data.quantitative_summary && (
+                      <div style={{
+                        marginTop: 16,
+                        background: 'rgba(56,189,248,0.04)',
+                        border: '1px solid rgba(56,189,248,0.14)',
+                        borderLeft: '3px solid rgba(56,189,248,0.4)',
+                        borderRadius: 10, padding: '12px 16px',
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 12, color: 'var(--info)', lineHeight: 1.75,
+                        letterSpacing: '0.03em',
+                      }}>
+                        {data.quantitative_summary}
+                      </div>
+                    )}
+                  </motion.div>
                 </div>
 
-                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                  <div className="mb-4 flex items-center gap-2 text-lg font-bold"><Info size={18} />Verdict</div>
-                  <p className="leading-7 text-slate-300">{data.verdict || 'No verdict returned.'}</p>
-                  {data.quantitative_summary && (<p className="mt-4 rounded-2xl border border-blue-900/40 bg-blue-950/20 p-4 text-sm text-blue-100">{data.quantitative_summary}</p>)}
-                </div>
-              </div>
+                <div
+                  className="sidebar-sticky"
+                  style={{
+                    display: 'flex', flexDirection: 'column', gap: 16,
+                    position: 'sticky', top: 24,
+                  }}
+                >
+                  <motion.div variants={fadeUp} className="void-card">
+                    <div className="section-label" style={{ marginBottom: 12 }}>TARGET PRICE</div>
+                    <div style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 40, fontWeight: 700, color: 'var(--accent)',
+                      lineHeight: 1,
+                      textShadow: '0 0 40px var(--accent-glow)',
+                    }}>
+                      ${animatedTarget}
+                    </div>
 
-              <div className="space-y-8">
-                <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-                  <div className="mb-2 text-xs uppercase tracking-widest text-slate-500">Target prices</div>
-                  <div className="text-4xl font-black text-emerald-400">${formatNum(data.target_price)}</div>
-                  <div className="mt-6 space-y-3 text-sm">
-                    <div className="flex justify-between"><span>3M target</span><span className="font-bold">${formatNum(data.target_prices?.three_months?.price)}</span></div>
-                    <div className="flex justify-between"><span>6M target</span><span className="font-bold">${formatNum(data.target_prices?.six_months?.price)}</span></div>
-                    <div className="flex justify-between"><span>12M target</span><span className="font-bold">${formatNum(data.target_prices?.twelve_months?.price)}</span></div>
-                  </div>
+                    <div style={{ marginTop: 20 }}>
+                      {[
+                        { label: '3M TARGET', value: data.target_prices?.three_months?.price },
+                        { label: '6M TARGET', value: data.target_prices?.six_months?.price },
+                        { label: '12M TARGET', value: data.target_prices?.twelve_months?.price },
+                      ].map((tp) => (
+                        <MetricRow key={tp.label} label={tp.label} value={`$${formatNum(tp.value)}`} decimals={2} />
+                      ))}
+                    </div>
+                  </motion.div>
+
+                  {data.analyst_consensus?.mean_target && (
+                    <motion.div variants={fadeUp} className="void-card">
+                      <div className="section-label" style={{ marginBottom: 12 }}>ANALYST CONSENSUS</div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 28, fontWeight: 700, color: 'var(--info)' }}>
+                          ${formatNum(data.analyst_consensus.mean_target)}
+                        </span>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.1em' }}>MEAN TARGET</span>
+                      </div>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: data.analyst_consensus.recommendation_key === 'buy' || data.analyst_consensus.recommendation_key === 'strong_buy' ? 'var(--gain)' : data.analyst_consensus.recommendation_key === 'sell' || data.analyst_consensus.recommendation_key === 'strong_sell' ? 'var(--loss)' : 'var(--text-muted)', letterSpacing: '0.14em', marginBottom: 14, textTransform: 'uppercase' }}>
+                        {data.analyst_consensus.recommendation_key?.replace('_', ' ')} · {data.analyst_consensus.num_analysts} analysts
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+                        {[
+                          { label: 'HIGH', value: data.analyst_consensus.high_target, color: 'var(--gain)' },
+                          { label: 'LOW', value: data.analyst_consensus.low_target, color: 'var(--loss)' },
+                        ].map((tp) => tp.value ? (
+                          <div key={tp.label} style={{ flex: 1, background: 'var(--surface)', borderRadius: 8, padding: '7px 10px', textAlign: 'center' }}>
+                            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, letterSpacing: '0.14em', color: 'var(--text-muted)', marginBottom: 3 }}>{tp.label}</div>
+                            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: tp.color }}>${formatNum(tp.value)}</div>
+                          </div>
+                        ) : null)}
+                      </div>
+                      {(data.analyst_consensus.strong_buy !== undefined || data.analyst_consensus.buy !== undefined) && (() => {
+                        const sb = data.analyst_consensus.strong_buy ?? 0;
+                        const b = data.analyst_consensus.buy ?? 0;
+                        const h = data.analyst_consensus.hold ?? 0;
+                        const s = data.analyst_consensus.sell ?? 0;
+                        const ss = data.analyst_consensus.strong_sell ?? 0;
+                        const total = sb + b + h + s + ss;
+                        if (total === 0) return null;
+                        return (
+                          <div>
+                            <div style={{ height: 8, borderRadius: 4, overflow: 'hidden', display: 'flex', gap: 1 }}>
+                              {[{ v: sb + b, c: 'var(--gain)' }, { v: h, c: '#f59e0b' }, { v: s + ss, c: 'var(--loss)' }].map((seg, i) => (
+                                <div key={i} style={{ flex: seg.v, background: seg.c, transition: 'flex 0.5s ease' }} />
+                              ))}
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
+                              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: 'var(--gain)' }}>BUY {sb + b}</span>
+                              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: '#f59e0b' }}>HOLD {h}</span>
+                              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: 'var(--loss)' }}>SELL {s + ss}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </motion.div>
+                  )}
+
+                  <motion.div variants={fadeUp} className="void-card">
+                    <SectionHeader label="KEY METRICS" />
+                    <div>
+                      <MetricRow label="MARKET CAP" value={data.key_metrics?.market_cap} />
+                      <MetricRow label="P/E (TTM)" value={formatNum(data.key_metrics?.pe_ratio)} />
+                      <MetricRow label="P/E (FWD)" value={formatNum(data.key_metrics?.forward_pe)} />
+                      <MetricRow label="P/B RATIO" value={formatNum(data.key_metrics?.price_to_book)} />
+                      <MetricRow label="EPS (TTM)" value={data.key_metrics?.eps_trailing ? `$${formatNum(data.key_metrics.eps_trailing)}` : undefined} />
+                      <MetricRow label="BETA" value={formatNum(data.key_metrics?.beta)} />
+                      <MetricRow label="DIV YIELD" value={data.key_metrics?.dividend_yield ? `${formatNum(data.key_metrics.dividend_yield)}%` : undefined} />
+                      <MetricRow label="52W HIGH" value={`$${formatNum(data.key_metrics?.fifty_two_week_high)}`} />
+                      <MetricRow label="52W LOW" value={`$${formatNum(data.key_metrics?.fifty_two_week_low)}`} />
+                      <MetricRow label="VOLUME" value={data.key_metrics?.volume?.toLocaleString()} />
+                      {data.key_metrics?.revenue_growth !== undefined && data.key_metrics.revenue_growth !== null && (
+                        <MetricRow label="REV GROWTH" value={`${(data.key_metrics.revenue_growth * 100).toFixed(1)}%`} color={data.key_metrics.revenue_growth >= 0 ? 'var(--gain)' : 'var(--loss)'} />
+                      )}
+                      {data.key_metrics?.profit_margins !== undefined && data.key_metrics.profit_margins !== null && (
+                        <MetricRow label="NET MARGIN" value={`${(data.key_metrics.profit_margins * 100).toFixed(1)}%`} />
+                      )}
+                      {data.key_metrics?.return_on_equity !== undefined && data.key_metrics.return_on_equity !== null && (
+                        <MetricRow label="ROE" value={`${(data.key_metrics.return_on_equity * 100).toFixed(1)}%`} />
+                      )}
+                      {data.key_metrics?.debt_to_equity !== undefined && data.key_metrics.debt_to_equity !== null && (
+                        <MetricRow label="D/E RATIO" value={`${formatNum(data.key_metrics.debt_to_equity)}%`} color={data.key_metrics.debt_to_equity > 200 ? 'var(--loss)' : undefined} />
+                      )}
+                    </div>
+                  </motion.div>
+
+                  <motion.div variants={fadeUp} className="void-card">
+                    <SectionHeader icon={<ShieldAlert size={14} />} label="AI REASONING" />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {(data.reasoning || []).map((point, idx) => (
+                        <ReasoningItem key={idx} index={idx} text={point} />
+                      ))}
+                      {(!data.reasoning || data.reasoning.length === 0) && (
+                        <EmptyState title="NO REASONING RETURNED" icon="data" />
+                      )}
+                    </div>
+                  </motion.div>
                 </div>
-                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                  <div className="mb-4 text-lg font-bold">Key metrics</div>
-                  <div className="space-y-3 text-sm text-slate-300">
-                    <div className="flex justify-between"><span>Market cap</span><span className="font-semibold">{data.key_metrics?.market_cap || 'N/A'}</span></div>
-                    <div className="flex justify-between"><span>P/E ratio</span><span className="font-semibold">{formatNum(data.key_metrics?.pe_ratio)}</span></div>
-                    <div className="flex justify-between"><span>Beta</span><span className="font-semibold">{formatNum(data.key_metrics?.beta)}</span></div>
-                    <div className="flex justify-between"><span>Dividend yield</span><span className="font-semibold">{formatNum(data.key_metrics?.dividend_yield)}%</span></div>
-                    <div className="flex justify-between"><span>52W high</span><span className="font-semibold">${formatNum(data.key_metrics?.fifty_two_week_high)}</span></div>
-                    <div className="flex justify-between"><span>52W low</span><span className="font-semibold">${formatNum(data.key_metrics?.fifty_two_week_low)}</span></div>
-                    <div className="flex justify-between"><span>Volume</span><span className="font-semibold">{data.key_metrics?.volume?.toLocaleString() || 'N/A'}</span></div>
-                  </div>
-                </div>
-                <div className="rounded-3xl border border-slate-800 bg-slate-900/50 p-6">
-                  <div className="mb-4 flex items-center gap-2 text-lg font-bold"><ShieldAlert size={18} />Reasoning</div>
-                  <div className="space-y-3">
-                    {(data.reasoning || []).map((point, idx) => (<div key={idx} className="rounded-2xl border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">{point}</div>))}
-                    {(!data.reasoning || data.reasoning.length === 0) && (<div className="text-sm text-slate-500">No reasoning points returned.</div>)}
-                  </div>
-                </div>
-              </div>
+              </motion.div>
+            )}
+
+            <div className="status-bar">
+              <span>SYS::ONLINE</span>
+              <span style={{ color: 'var(--accent)' }}>● READY</span>
+              <span>v2.0.0</span>
             </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+          </div>
+        )}
+      </div>
+    );
+  }

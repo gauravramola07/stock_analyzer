@@ -1,8 +1,7 @@
 import yfinance as yf
-import requests_cache
 from crewai.tools import BaseTool
 from typing import Dict, Any, List
-from datetime import datetime, timezone
+from utils import _to_iso_date
 
 try:
     from langchain_community.tools import DuckDuckGoSearchRun
@@ -10,19 +9,8 @@ except ImportError:  # pragma: no cover
     from langchain_community.tools.ddg_search.tool import DuckDuckGoSearchRun
 
 
-# Cache Yahoo Finance requests for one hour to reduce latency and rate-limit issues.
-requests_cache.install_cache("yfinance_cache", expire_after=3600)
-
-
-def _to_iso_date(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d")
-    except Exception:
-        pass
-    return str(value)
+# NOTE: Caching is managed centrally by prefetch.py via CachedSession.
+# Do NOT call requests_cache.install_cache() here — it conflicts with prefetch.py.
 
 
 class StockDataTool(BaseTool):

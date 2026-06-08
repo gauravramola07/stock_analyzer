@@ -1,15 +1,161 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from crew import run_analysis
+from sse_starlette.event import ServerSentEvent
 import yfinance as yf
 import json
 import asyncio
+import time
+import os
+import tempfile
+from contextlib import asynccontextmanager
 from sse_starlette.sse import EventSourceResponse
 import pandas as pd
 import requests
 from io import StringIO
 
-app = FastAPI(title="Stock Intelligence API")
+TICKER_FILE = os.path.join(tempfile.gettempdir(), "stock_analyzer_tickers.json")
+TICKER_CACHE = []
+RESULT_CACHE = {}
+RESULT_CACHE_TTL = 3600
+
+# ---------------------------------------------------------------------------
+# In-flight deduplication: one pipeline per ticker, N SSE subscribers.
+# Each RunningAnalysis holds an append-only event log so late-joining or
+# reconnecting subscribers can replay buffered events before tailing live.
+# ---------------------------------------------------------------------------
+class RunningAnalysis:
+    def __init__(self):
+        self.events: list = []          # append-only [{event, data}]
+        self.done: bool = False
+        self.result: str | None = None
+        self.error: str | None = None
+        self._new_event = asyncio.Event()  # set briefly when events arrive
+
+    def push(self, event_dict: dict):
+        self.events.append(event_dict)
+        self._new_event.set()
+
+    def finish(self, result: str):
+        self.result = result
+        self.done = True
+        self._new_event.set()
+
+    def fail(self, error: str):
+        self.error = error
+        self.done = True
+        self._new_event.set()
+
+    async def wait_for_events(self):
+        """Async-wait until new events are pushed (or analysis completes)."""
+        self._new_event.clear()
+        await self._new_event.wait()
+
+
+RUNNING: dict[str, RunningAnalysis] = {}
+
+
+def _fetch_tickers_from_sources():
+    """Fetch all tickers from NASDAQ trader + additional sources."""
+    all_symbols = []
+
+    try:
+        nasdaq_url = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+        nasdaq_text = requests.get(nasdaq_url, timeout=30).text
+        nasdaq_df = pd.read_csv(StringIO(nasdaq_text), sep="|")
+        nasdaq_symbols = nasdaq_df["Symbol"].dropna().astype(str).tolist()
+        all_symbols.extend(nasdaq_symbols)
+    except Exception as e:
+        print(f"NASDAQ fetch error: {e}")
+
+    try:
+        other_url = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+        other_text = requests.get(other_url, timeout=30).text
+        other_df = pd.read_csv(StringIO(other_text), sep="|")
+        other_symbols = other_df["ACT Symbol"].dropna().astype(str).tolist()
+        all_symbols.extend(other_symbols)
+    except Exception as e:
+        print(f"Otherlisted fetch error: {e}")
+
+    # Deduplicate, clean, sort
+    tickers = sorted(
+        list(
+            set(
+                [
+                    s.strip()
+                    for s in all_symbols
+                    if s and "." not in s and "$" not in s and len(s) <= 6
+                ]
+            )
+        )
+    )
+
+    return tickers
+
+
+def _save_tickers_to_file(tickers):
+    """Persist ticker list to a local temp file."""
+    try:
+        with open(TICKER_FILE, "w") as f:
+            json.dump(tickers, f)
+        print(f"Saved {len(tickers)} tickers to {TICKER_FILE}")
+    except Exception as e:
+        print(f"Error saving ticker file: {e}")
+
+
+def _load_tickers_from_file():
+    """Load ticker list from the local temp file."""
+    try:
+        if os.path.exists(TICKER_FILE):
+            with open(TICKER_FILE, "r") as f:
+                tickers = json.load(f)
+            if tickers and len(tickers) > 100:
+                print(f"Loaded {len(tickers)} tickers from {TICKER_FILE}")
+                return tickers
+    except Exception as e:
+        print(f"Error loading ticker file: {e}")
+    return None
+
+
+def load_all_tickers():
+    """Return all tickers — from memory cache, temp file, or fresh fetch."""
+    global TICKER_CACHE
+
+    if TICKER_CACHE:
+        return TICKER_CACHE
+
+    # Try temp file first (fast)
+    file_tickers = _load_tickers_from_file()
+    if file_tickers:
+        TICKER_CACHE = file_tickers
+        return TICKER_CACHE
+
+    # Fresh fetch from sources
+    tickers = _fetch_tickers_from_sources()
+    if tickers:
+        TICKER_CACHE = tickers
+        _save_tickers_to_file(tickers)
+    else:
+        # Ultimate fallback
+        TICKER_CACHE = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
+                        "AMD", "NFLX", "CRM", "ADBE", "PYPL", "UBER", "COIN",
+                        "INTC", "DIS", "BA", "JPM", "V", "MA", "WMT", "KO",
+                        "PEP", "PFE", "JNJ", "XOM", "CVX", "GS", "IBM", "ORCL"]
+
+    return TICKER_CACHE
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-load all tickers on startup and save to temp file."""
+    print("🚀 Starting up — pre-loading all tickers...")
+    load_all_tickers()
+    print(f"✅ {len(TICKER_CACHE)} tickers ready.")
+    yield
+    print("🛑 Shutting down.")
+
+
+app = FastAPI(title="Stock Intelligence API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,79 +164,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TICKER_CACHE = []
 
-
-def load_all_tickers():
-    global TICKER_CACHE
-
-    if TICKER_CACHE:
-        return TICKER_CACHE
-
-    try:
-        nasdaq_url = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
-        nasdaq_text = requests.get(nasdaq_url, timeout=30).text
-
-        nasdaq_df = pd.read_csv(
-            StringIO(nasdaq_text),
-            sep="|"
-        )
-
-        nasdaq_symbols = (
-            nasdaq_df["Symbol"]
-            .dropna()
-            .astype(str)
-            .tolist()
-        )
-
-        other_url = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
-        other_text = requests.get(other_url, timeout=30).text
-
-        other_df = pd.read_csv(
-            StringIO(other_text),
-            sep="|"
-        )
-
-        other_symbols = (
-            other_df["ACT Symbol"]
-            .dropna()
-            .astype(str)
-            .tolist()
-        )
-
-        tickers = sorted(
-            list(
-                set(
-                    [
-                        s.strip()
-                        for s in nasdaq_symbols + other_symbols
-                        if s and "." not in s and "$" not in s
-                    ]
-                )
-            )
-        )
-
-        TICKER_CACHE = tickers
-        return tickers
-
-    except Exception as e:
-        print(f"Ticker load error: {e}")
-        return ["AAPL", "MSFT", "NVDA", "TSLA"]
+@app.get("/api/tickers")
+async def get_all_tickers():
+    """Return the complete ticker list with metadata."""
+    tickers = load_all_tickers()
+    return {
+        "count": len(tickers),
+        "tickers": tickers,
+        "source": "cached" if TICKER_CACHE else "fetched",
+    }
 
 
 @app.get("/api/tickers/search")
-async def search_tickers(q: str = ""):
+async def search_tickers(q: str = "", limit: int = 0):
+    """Search tickers. limit=0 means return all matches."""
     tickers = load_all_tickers()
 
     if not q:
         return tickers
 
     q = q.upper()
+    matches = [t for t in tickers if q in t]
 
-    return [
-        t for t in tickers
-        if q in t
-    ]
+    if limit and limit > 0:
+        return matches[:limit]
+
+    return matches
 
 
 @app.get("/api/stock/{ticker}/history")
@@ -139,56 +239,135 @@ def _extract_role(step_output) -> str:
     return "Agent"
 
 
-@app.get("/api/analyze/stream/{ticker}")
-async def stream_analysis(ticker: str):
-    async def event_generator():
-        queue = asyncio.Queue()
-        loop = asyncio.get_running_loop()
+def _start_analysis_task(ticker: str, run: RunningAnalysis):
+    """
+    Launch the analysis pipeline as a background asyncio task.
+    All events are pushed into `run` (the shared broadcast object).
+    This function is called ONCE per ticker — subsequent SSE connections
+    just subscribe to the same `run` object.
+    """
+    loop = asyncio.get_running_loop()
+    log_queue: asyncio.Queue = asyncio.Queue()
 
-        def crew_callback(step_output):
-            try:
-                agent_name = _extract_role(step_output)
+    def crew_callback(step_output):
+        try:
+            agent_name = _extract_role(step_output)
+            phase_map = {
+                "Market Data Researcher": "data",
+                "Financial News Analyst": "news",
+                "Technical Analyst": "analysis",
+                "Chief Risk Officer": "risk",
+                "Senior Equity Analyst": "expert",
+            }
+            step = phase_map.get(agent_name, "data")
+            loop.call_soon_threadsafe(
+                log_queue.put_nowait,
+                {"event": "phase", "data": json.dumps({"step": step, "status": "running"})},
+            )
+            thought = "Processing data..."
+            if hasattr(step_output, "thought") and step_output.thought:
+                thought = str(step_output.thought)[:80] + "..."
+            elif hasattr(step_output, "tool"):
+                thought = f"Invoking function: {step_output.tool}..."
+            loop.call_soon_threadsafe(
+                log_queue.put_nowait,
+                {"event": "log", "data": f"[{agent_name}] {thought}"},
+            )
+        except Exception:
+            pass
 
-                phase_map = {
-                    "Market Data Researcher": "data",
-                    "Financial News Analyst": "news",
-                    "Technical Analyst": "analysis",
-                    "Chief Risk Officer": "risk",
-                    "Senior Equity Analyst": "expert",
-                }
-                current_step = phase_map.get(agent_name, "data")
+    async def _run():
+        analysis_task = asyncio.create_task(
+            run_analysis(ticker, step_callback=crew_callback, log_queue=log_queue)
+        )
 
-                phase_payload = json.dumps({"step": current_step, "status": "running"})
-                loop.call_soon_threadsafe(queue.put_nowait, {"event": "phase", "data": phase_payload})
+        # Drain log_queue into run.events while analysis is running
+        async def _drain():
+            while not analysis_task.done():
+                try:
+                    msg = await asyncio.wait_for(log_queue.get(), timeout=1.0)
+                    run.push(msg)
+                except asyncio.TimeoutError:
+                    continue
+            # Drain remaining after task ends
+            while not log_queue.empty():
+                try:
+                    run.push(log_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
 
-                thought = "Processing data..."
-                if hasattr(step_output, "thought") and step_output.thought:
-                    thought = str(step_output.thought)[:80] + "..."
-                elif hasattr(step_output, "tool"):
-                    thought = f"Invoking function: {step_output.tool}..."
-
-                msg = f"[{agent_name}] {thought}"
-                loop.call_soon_threadsafe(queue.put_nowait, {"event": "log", "data": msg})
-            except Exception:
-                pass
-
-        analysis_task = asyncio.create_task(run_analysis(ticker, step_callback=crew_callback, log_queue=queue))
-
-        while not analysis_task.done():
-            try:
-                msg_dict = await asyncio.wait_for(queue.get(), timeout=1.0)
-                yield msg_dict
-            except asyncio.TimeoutError:
-                continue
+        drain_task = asyncio.create_task(_drain())
 
         try:
             result = await analysis_task
-            yield {"event": "phase", "data": json.dumps({"step": "complete", "status": "done"})}
-            yield {"event": "final_result", "data": result}
+            await drain_task
+            RESULT_CACHE[ticker] = {"result": result, "timestamp": time.time()}
+            run.push({"event": "phase", "data": json.dumps({"step": "complete", "status": "done"})})
+            run.finish(result)
+            print(f"[stream] Analysis complete for {ticker} — {len(run.events)} events buffered")
         except Exception as e:
-            yield {"event": "error", "data": str(e)}
+            await drain_task
+            print(f"[stream] Analysis failed for {ticker}: {e}")
+            run.fail(str(e))
+        finally:
+            RUNNING.pop(ticker, None)
 
-    return EventSourceResponse(event_generator())
+    asyncio.create_task(_run())
+
+
+@app.get("/api/analyze/stream/{ticker}")
+async def stream_analysis(ticker: str):
+    # 1. Serve completed result from cache instantly
+    cached = RESULT_CACHE.get(ticker)
+    if cached and time.time() - cached["timestamp"] < RESULT_CACHE_TTL:
+        async def cached_generator():
+            yield {"event": "phase", "data": json.dumps({"step": "complete", "status": "done"})}
+            yield {"event": "final_result", "data": cached["result"]}
+        return EventSourceResponse(cached_generator())
+
+    # 2. Attach to existing in-flight analysis OR start a fresh one
+    if ticker not in RUNNING:
+        print(f"[stream] Starting new analysis for {ticker}")
+        run = RunningAnalysis()
+        RUNNING[ticker] = run
+        _start_analysis_task(ticker, run)
+    else:
+        buffered = len(RUNNING[ticker].events)
+        print(f"[stream] Subscriber joined existing run for {ticker} ({buffered} events already buffered)")
+
+    run = RUNNING[ticker]
+
+    # 3. Fan-out SSE: replay all buffered events, then tail until done
+    async def event_generator():
+        cursor = 0  # next index in run.events not yet sent to this subscriber
+
+        while True:
+            # Replay any buffered events this subscriber hasn't received yet
+            while cursor < len(run.events):
+                yield run.events[cursor]
+                cursor += 1
+
+            # If the pipeline is done, deliver the final outcome and stop
+            if run.done:
+                if run.result:
+                    yield {"event": "final_result", "data": run.result}
+                elif run.error:
+                    yield {"event": "error", "data": run.error}
+                return
+
+            # Wait for new events (20s timeout — SSE ping= keeps connection alive)
+            try:
+                await asyncio.wait_for(run._new_event.wait(), timeout=20.0)
+                run._new_event.clear()
+            except asyncio.TimeoutError:
+                pass  # no new events yet; loop back and check again
+
+    return EventSourceResponse(
+        event_generator(),
+        ping=20,
+        ping_message_factory=lambda: ServerSentEvent(comment="keep-alive"),
+        send_timeout=600,
+    )
 
 
 @app.get("/")

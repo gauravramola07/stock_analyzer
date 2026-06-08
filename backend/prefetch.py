@@ -2,21 +2,20 @@ import yfinance as yf
 import asyncio
 import requests_cache
 import pandas as pd
-from typing import Dict, Any, List
-from datetime import datetime, timezone
+import numpy as np
+from typing import Dict, Any, List, Optional
+from utils import _to_iso_date
 
-requests_cache.install_cache("yfinance_cache", expire_after=3600)
+cached_session = requests_cache.CachedSession("yfinance_cache", expire_after=3600)
+yf.set_tz_cache_location("yfinance_cache")
 
 
-def _to_iso_date(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d")
-    except Exception:
-        pass
-    return str(value)
+def _patch_yfinance_session():
+    if hasattr(yf.Ticker, "_session"):
+        yf.Ticker._session = cached_session
+
+
+_patch_yfinance_session()
 
 
 def _safe_get(df: pd.DataFrame, label: str, col) -> Any:
@@ -39,20 +38,38 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         dividend_yield = info.get("dividendYield")
         if dividend_yield is None:
             dividend_yield = info.get("trailingAnnualDividendYield")
+            if dividend_yield is not None:
+                dividend_yield = float(dividend_yield) * 100.0
         current = info.get("currentPrice") or info.get("regularMarketPrice")
         prev = info.get("previousClose") or current
         day_change_pct = ((current - prev) / prev * 100) if prev and current else 0
+        quote_type = info.get("quoteType", "EQUITY")
         return {
+            "quoteType": quote_type,
+            "isETF": quote_type in ("ETF", "MUTUALFUND", "INDEX"),
             "currentPrice": current,
             "previousClose": prev,
             "dayChangePct": round(float(day_change_pct), 2) if day_change_pct else 0,
             "marketCap": info.get("marketCap"),
             "trailingPE": info.get("trailingPE"),
+            "forwardPE": info.get("forwardPE"),
+            "priceToBook": info.get("priceToBook"),
+            "priceToSalesTrailing12Months": info.get("priceToSalesTrailing12Months"),
             "beta": info.get("beta"),
             "dividendYield": dividend_yield,
             "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
             "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
             "volume": info.get("volume"),
+            "averageVolume": info.get("averageVolume"),
+            "epsTrailingTwelveMonths": info.get("epsTrailingTwelveMonths"),
+            "epsForward": info.get("epsForward"),
+            "revenueGrowth": info.get("revenueGrowth"),
+            "earningsGrowth": info.get("earningsGrowth"),
+            "profitMargins": info.get("profitMargins"),
+            "operatingMargins": info.get("operatingMargins"),
+            "returnOnEquity": info.get("returnOnEquity"),
+            "debtToEquity": float(info.get("debtToEquity")) if info.get("debtToEquity") is not None else None,
+            "currentRatio": info.get("currentRatio"),
             "longBusinessSummary": info.get("longBusinessSummary", "N/A"),
             "shortName": info.get("shortName") or info.get("longName") or ticker,
             "sector": info.get("sector", ""),
@@ -67,9 +84,10 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
 
 
 def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
+    """Fetch 6-month price history for meaningful support/resistance levels."""
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1mo", auto_adjust=False)
+        hist = stock.history(period="6mo", auto_adjust=False)
         if hist.empty:
             return []
         hist = hist.reset_index()
@@ -77,10 +95,15 @@ def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
         if date_column in hist.columns:
             hist[date_column] = hist[date_column].dt.strftime("%Y-%m-%d")
         close_col = "Close" if "Close" in hist.columns else None
+        volume_col = "Volume" if "Volume" in hist.columns else None
         if not close_col:
             return []
         return [
-            {"date": row[date_column], "price": round(float(row[close_col]), 2)}
+            {
+                "date": row[date_column],
+                "price": round(float(row[close_col]), 2),
+                "volume": int(row[volume_col]) if volume_col and row.get(volume_col) is not None else None,
+            }
             for _, row in hist.iterrows()
             if row.get(close_col) is not None
         ]
@@ -92,24 +115,271 @@ def fetch_stock_news(ticker: str) -> List[Dict[str, Any]]:
     try:
         stock = yf.Ticker(ticker)
         news = getattr(stock, "news", []) or []
-        cleaned = []
-        for item in news[:10]:
-            published = item.get("providerPublishTime") or item.get("pubDate")
-            title = item.get("title", "")
-            summary = item.get("summary", "")
+        
+        # Get keywords for filtering relevance
+        keywords = [ticker.lower()]
+        try:
+            info = stock.info or {}
+            company_name = info.get("shortName") or info.get("longName") or ""
+            if company_name:
+                # Remove common corporate suffixes like Inc., Corp., Co., Ltd., Class A, etc.
+                clean_name = company_name.replace("Inc.", "").replace("Corp.", "").replace("Corporation", "").replace("Co.", "").replace("Ltd.", "").strip()
+                parts = [p.lower() for p in clean_name.split() if len(p) > 2]
+                if parts:
+                    keywords.append(parts[0])
+        except Exception:
+            pass
+
+        scored_articles = []
+        for item in news:
+            content = item.get("content", item) if isinstance(item, dict) else {}
+            if not isinstance(content, dict):
+                content = item
+            published = content.get("providerPublishTime") or content.get("pubDate")
+            title = content.get("title", "")
+            summary = content.get("summary", "")
             if not title and not summary:
                 continue
-            cleaned.append({
+
+            # Filter relevance by checking keywords in title or summary
+            title_lower = title.lower()
+            summary_lower = summary.lower()
+            
+            has_kw_title = any(kw in title_lower for kw in keywords)
+            has_kw_summary = any(kw in summary_lower for kw in keywords)
+            
+            if not (has_kw_title or has_kw_summary):
+                continue
+
+            # Score relevance
+            score = 0
+            if has_kw_title:
+                score += 10
+            if has_kw_summary:
+                score += 3
+
+            # Extract source
+            provider = content.get("provider")
+            if isinstance(provider, dict):
+                source = provider.get("displayName") or provider.get("publisher") or provider.get("source") or "Unknown"
+            else:
+                source = content.get("publisher") or content.get("source") or "Unknown"
+
+            # Extract URL
+            canonical = content.get("canonicalUrl")
+            click_through = content.get("clickThroughUrl")
+            if isinstance(canonical, dict):
+                url = canonical.get("url")
+            elif isinstance(click_through, dict):
+                url = click_through.get("url")
+            else:
+                url = content.get("link")
+
+            # Formatting published date
+            date_str = _to_iso_date(published)
+            if "T" in date_str:
+                date_str = date_str.split("T")[0]
+
+            scored_articles.append((score, {
                 "title": title or "Untitled",
-                "source": item.get("publisher") or item.get("source") or "Unknown",
-                "date": _to_iso_date(published),
-                "url": item.get("link"),
+                "source": source,
+                "date": date_str,
+                "url": url,
                 "summary": summary or title or "No summary available.",
                 "sentiment": "Neutral",
-            })
-        return cleaned
+            }))
+            
+        # Sort by score descending
+        scored_articles.sort(key=lambda x: x[0], reverse=True)
+        return [art for _, art in scored_articles[:8]]
     except Exception:
         return []
+
+
+def fetch_analyst_data(ticker: str) -> Dict[str, Any]:
+    """Fetch analyst price targets and recommendation summary from yfinance."""
+    result: Dict[str, Any] = {
+        "mean_target": None,
+        "high_target": None,
+        "low_target": None,
+        "median_target": None,
+        "num_analysts": None,
+        "recommendation_key": None,
+        "recommendation_mean": None,
+        "strong_buy": None,
+        "buy": None,
+        "hold": None,
+        "sell": None,
+        "strong_sell": None,
+    }
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info or {}
+
+        # Price targets from info dict (most reliable)
+        result["mean_target"] = info.get("targetMeanPrice")
+        result["high_target"] = info.get("targetHighPrice")
+        result["low_target"] = info.get("targetLowPrice")
+        result["median_target"] = info.get("targetMedianPrice")
+        result["num_analysts"] = info.get("numberOfAnalystOpinions")
+        result["recommendation_key"] = info.get("recommendationKey")  # e.g. "buy", "hold"
+        result["recommendation_mean"] = info.get("recommendationMean")  # 1=Strong Buy, 5=Strong Sell
+
+        # Analyst count breakdown from recommendations_summary if available
+        try:
+            rec_summary = stock.recommendations_summary
+            if rec_summary is not None and not rec_summary.empty:
+                latest = rec_summary.iloc[0]
+                result["strong_buy"] = int(latest.get("strongBuy", 0)) if not pd.isna(latest.get("strongBuy", 0)) else None
+                result["buy"] = int(latest.get("buy", 0)) if not pd.isna(latest.get("buy", 0)) else None
+                result["hold"] = int(latest.get("hold", 0)) if not pd.isna(latest.get("hold", 0)) else None
+                result["sell"] = int(latest.get("sell", 0)) if not pd.isna(latest.get("sell", 0)) else None
+                result["strong_sell"] = int(latest.get("strongSell", 0)) if not pd.isna(latest.get("strongSell", 0)) else None
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"[prefetch] analyst_data error for {ticker}: {e}")
+
+    return result
+
+
+def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
+    """
+    Pre-compute key technical indicators from 6-month history.
+    Returns SMA-20, SMA-50, RSI-14, MACD line/signal, and Bollinger Bands.
+    Computing these here (not in the LLM) eliminates hallucination risk.
+    """
+    result: Dict[str, Any] = {
+        "sma_20": None,
+        "sma_50": None,
+        "rsi_14": None,
+        "macd_line": None,
+        "macd_signal": None,
+        "macd_histogram": None,
+        "macd_crossover": None,  # "Bullish" | "Bearish" | "Neutral"
+        "bb_upper": None,
+        "bb_lower": None,
+        "bb_position": None,  # % position within bands (0=lower, 1=upper)
+        "price_vs_sma20": None,  # "above" | "below"
+        "price_vs_sma50": None,
+        "rsi_signal": None,  # "Overbought" | "Oversold" | "Neutral"
+        "fifty_two_week_position": None,  # % between 52-wk low and high
+        "avg_volume_ratio": None,  # today's volume vs 20d avg
+        "volatility_30d": None,
+    }
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="6mo", auto_adjust=True)
+        if hist.empty or len(hist) < 20:
+            return result
+
+        closes = hist["Close"].dropna()
+        if len(closes) < 14:
+            return result
+
+        # SMA
+        if len(closes) >= 20:
+            result["sma_20"] = round(float(closes.rolling(20).mean().iloc[-1]), 2)
+        if len(closes) >= 50:
+            result["sma_50"] = round(float(closes.rolling(50).mean().iloc[-1]), 2)
+
+        current_price = float(closes.iloc[-1])
+
+        if result["sma_20"]:
+            result["price_vs_sma20"] = "above" if current_price > result["sma_20"] else "below"
+        if result["sma_50"]:
+            result["price_vs_sma50"] = "above" if current_price > result["sma_50"] else "below"
+
+        # RSI-14
+        delta = closes.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs))
+        rsi_val = float(rsi.iloc[-1])
+        result["rsi_14"] = round(rsi_val, 2)
+        if rsi_val >= 70:
+            result["rsi_signal"] = "Overbought"
+        elif rsi_val <= 30:
+            result["rsi_signal"] = "Oversold"
+        else:
+            result["rsi_signal"] = "Neutral"
+
+        # MACD (12, 26, 9)
+        ema12 = closes.ewm(span=12, adjust=False).mean()
+        ema26 = closes.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+        macd_hist = macd_line - macd_signal
+
+        result["macd_line"] = round(float(macd_line.iloc[-1]), 4)
+        result["macd_signal"] = round(float(macd_signal.iloc[-1]), 4)
+        result["macd_histogram"] = round(float(macd_hist.iloc[-1]), 4)
+
+        # Detect crossover (last 3 bars)
+        if len(macd_hist) >= 3:
+            prev_hist = float(macd_hist.iloc[-2])
+            curr_hist = float(macd_hist.iloc[-1])
+            if prev_hist < 0 and curr_hist > 0:
+                result["macd_crossover"] = "Bullish"
+            elif prev_hist > 0 and curr_hist < 0:
+                result["macd_crossover"] = "Bearish"
+            else:
+                result["macd_crossover"] = "Neutral"
+
+        # Bollinger Bands (20, 2)
+        sma20_series = closes.rolling(20).mean()
+        std20 = closes.rolling(20).std()
+        bb_upper = sma20_series + 2 * std20
+        bb_lower = sma20_series - 2 * std20
+        bb_u = float(bb_upper.iloc[-1])
+        bb_l = float(bb_lower.iloc[-1])
+        result["bb_upper"] = round(bb_u, 2)
+        result["bb_lower"] = round(bb_l, 2)
+        band_width = bb_u - bb_l
+        if band_width > 0:
+            result["bb_position"] = round((current_price - bb_l) / band_width, 3)
+
+        # Volume ratio
+        if "Volume" in hist.columns:
+            volumes = hist["Volume"].dropna()
+            if len(volumes) >= 20:
+                avg_vol = float(volumes.rolling(20).mean().iloc[-1])
+                today_vol = float(volumes.iloc[-1])
+                if avg_vol > 0:
+                    result["avg_volume_ratio"] = round(today_vol / avg_vol, 2)
+
+        # 52-week position
+        info = stock.info or {}
+        high_52 = info.get("fiftyTwoWeekHigh")
+        low_52 = info.get("fiftyTwoWeekLow")
+        if high_52 and low_52 and (high_52 - low_52) > 0:
+            result["fifty_two_week_position"] = round(
+                (current_price - low_52) / (high_52 - low_52), 3
+            )
+
+        # Volatility (30-day annualized)
+        if len(closes) >= 30:
+            returns = closes.pct_change().dropna()
+            std_30d = returns.tail(30).std()
+            annualized_vol = std_30d * np.sqrt(252)
+            result["volatility_30d"] = round(float(annualized_vol), 4)
+        elif len(closes) > 1:
+            returns = closes.pct_change().dropna()
+            std_all = returns.std()
+            annualized_vol = std_all * np.sqrt(252)
+            result["volatility_30d"] = round(float(annualized_vol), 4)
+        else:
+            result["volatility_30d"] = 0.0
+
+
+    except Exception as e:
+        print(f"[prefetch] technical_indicators error for {ticker}: {e}")
+
+    return result
 
 
 def fetch_financial_data(ticker: str) -> Dict[str, Any]:
@@ -148,12 +418,18 @@ async def prefetch_all(ticker: str) -> Dict[str, Any]:
     history_coro = loop.run_in_executor(None, fetch_stock_history, ticker)
     news_coro = loop.run_in_executor(None, fetch_stock_news, ticker)
     financial_coro = loop.run_in_executor(None, fetch_financial_data, ticker)
-    stock_data, history, news, financial_data = await asyncio.gather(
-        data_coro, history_coro, news_coro, financial_coro
+    analyst_coro = loop.run_in_executor(None, fetch_analyst_data, ticker)
+    indicators_coro = loop.run_in_executor(None, fetch_technical_indicators, ticker)
+
+    stock_data, history, news, financial_data, analyst_data, technical_indicators = await asyncio.gather(
+        data_coro, history_coro, news_coro, financial_coro, analyst_coro, indicators_coro
     )
+
     return {
         "stock_data": stock_data,
         "history": history,
         "news": news,
         "financial_data": financial_data,
+        "analyst_data": analyst_data,
+        "technical_indicators": technical_indicators,
     }

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
 
 class TickerRequest(BaseModel):
@@ -23,13 +23,63 @@ class KeyMetrics(BaseModel):
     fifty_two_week_high: Optional[float] = None
     fifty_two_week_low: Optional[float] = None
     volume: Optional[int] = None
+    forward_pe: Optional[float] = None
+    price_to_book: Optional[float] = None
+    eps_trailing: Optional[float] = None
+    eps_forward: Optional[float] = None
+    revenue_growth: Optional[float] = None
+    earnings_growth: Optional[float] = None
+    profit_margins: Optional[float] = None
+    return_on_equity: Optional[float] = None
+    debt_to_equity: Optional[float] = None
 
 
 class TechnicalAnalysis(BaseModel):
-    trend: str
+    trend: Literal[
+        "Strong Uptrend", "Moderately Bullish", "Sideways / Consolidation",
+        "Moderately Bearish", "Strong Downtrend", "N/A"
+    ] = "N/A"
     volatility: float
     support: Optional[float] = None
     resistance: Optional[float] = None
+    momentum: Optional[str] = None
+    rsi_interpretation: Optional[str] = None
+    macd_interpretation: Optional[str] = None
+
+
+class TechnicalIndicators(BaseModel):
+    sma_20: Optional[float] = None
+    sma_50: Optional[float] = None
+    rsi_14: Optional[float] = None
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    macd_crossover: Optional[str] = None
+    bb_upper: Optional[float] = None
+    bb_lower: Optional[float] = None
+    bb_position: Optional[float] = None
+    price_vs_sma20: Optional[str] = None
+    price_vs_sma50: Optional[str] = None
+    rsi_signal: Optional[str] = None
+    fifty_two_week_position: Optional[float] = None
+    avg_volume_ratio: Optional[float] = None
+    volatility_30d: Optional[float] = None
+
+
+
+class AnalystConsensus(BaseModel):
+    mean_target: Optional[float] = None
+    high_target: Optional[float] = None
+    low_target: Optional[float] = None
+    median_target: Optional[float] = None
+    num_analysts: Optional[int] = None
+    recommendation_key: Optional[str] = None
+    recommendation_mean: Optional[float] = None
+    strong_buy: Optional[int] = None
+    buy: Optional[int] = None
+    hold: Optional[int] = None
+    sell: Optional[int] = None
+    strong_sell: Optional[int] = None
 
 
 class TargetPricePoint(BaseModel):
@@ -64,6 +114,15 @@ class FinancialRecord(BaseModel):
     source: Optional[str] = None
 
 
+class DataQuality(BaseModel):
+    level: str  # "High" | "Medium" | "Low"
+    label: str  # Human readable label
+    has_analyst_consensus: bool = False
+    has_technical_indicators: bool = False
+    has_news: bool = False
+    has_financials: bool = False
+
+
 class FinalVerdict(BaseModel):
     ticker: str
     company_name: str
@@ -75,16 +134,19 @@ class FinalVerdict(BaseModel):
     financial_records: List[FinancialRecord] = Field(default_factory=list)
     news_summary: List[NewsArticle] = Field(default_factory=list)
     technical_analysis: TechnicalAnalysis
+    technical_indicators: Optional[TechnicalIndicators] = None
+    analyst_consensus: Optional[AnalystConsensus] = None
     fundamental_analysis: Dict[str, Any] = Field(default_factory=dict)
-    recommendation: str
+    recommendation: Literal["Strong Buy", "Buy", "Speculative Buy", "Accumulate", "Hold", "Avoid"]
     target_price: float
     target_prices: Optional[TargetPrices] = None
     time_horizon: str
     confidence_score: float
-    risk_level: str
+    risk_level: Literal["Low", "Medium", "High"]
     verdict: str
     quantitative_summary: Optional[str] = None
     reasoning: List[str] = Field(default_factory=list)
+    data_quality: Optional[DataQuality] = None
 
     class Config:
         extra = "allow"
