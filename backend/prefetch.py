@@ -6,16 +6,64 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from utils import _to_iso_date
 
-cached_session = requests_cache.CachedSession("yfinance_cache", expire_after=3600)
+import time
+
 yf.set_tz_cache_location("yfinance_cache")
 
+# Global memory cache for prefetch data to avoid rate limits
+_PREFETCH_CACHE = {}
+_PREFETCH_CACHE_TTL = 1800  # 30 minutes cache
 
-def _patch_yfinance_session():
-    if hasattr(yf.Ticker, "_session"):
-        yf.Ticker._session = cached_session
-
-
-_patch_yfinance_session()
+def _with_cache_and_retry(ticker: str, cache_key: str, fetch_fn):
+    now = time.time()
+    full_key = f"{ticker}:{cache_key}"
+    
+    # Check cache
+    if full_key in _PREFETCH_CACHE:
+        val, expiry = _PREFETCH_CACHE[full_key]
+        if now < expiry:
+            return val
+            
+    # Retry configuration
+    max_retries = 3
+    backoff_factor = 2.0
+    last_err = None
+    
+    for attempt in range(max_retries):
+        try:
+            res = fetch_fn()
+            # If the fetch returned an error representation, raise to trigger retry
+            if isinstance(res, dict) and "error" in res:
+                # If it's a rate limit error, raise to trigger retry
+                if "rate limit" in res["error"].lower() or "too many requests" in res["error"].lower():
+                    raise Exception(res["error"])
+            
+            # Cache the successful result
+            _PREFETCH_CACHE[full_key] = (res, now + _PREFETCH_CACHE_TTL)
+            return res
+        except Exception as e:
+            last_err = e
+            err_msg = str(e)
+            is_rate_limit = (
+                "429" in err_msg 
+                or "rate limit" in err_msg.lower() 
+                or "too many requests" in err_msg.lower()
+                or "RateLimit" in type(e).__name__
+            )
+            if is_rate_limit and attempt < max_retries - 1:
+                sleep_time = backoff_factor ** attempt
+                print(f"[prefetch] Rate limit hit for {full_key} (attempt {attempt+1}/{max_retries}). Retrying in {sleep_time:.2f}s...")
+                time.sleep(sleep_time)
+                continue
+            elif attempt < max_retries - 1:
+                time.sleep(1.0)
+                continue
+            else:
+                break
+                
+    if last_err:
+        raise last_err
+    raise Exception(f"Failed to fetch {full_key}")
 
 
 def _safe_get(df: pd.DataFrame, label: str, col) -> Any:
@@ -32,7 +80,7 @@ def _safe_get(df: pd.DataFrame, label: str, col) -> Any:
 
 
 def fetch_stock_data(ticker: str) -> Dict[str, Any]:
-    try:
+    def _fetch():
         stock = yf.Ticker(ticker)
         info = stock.info or {}
         dividend_yield = info.get("dividendYield")
@@ -80,13 +128,17 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
             "website": info.get("website", ""),
             "fullTimeEmployees": info.get("fullTimeEmployees"),
         }
+
+    try:
+        return _with_cache_and_retry(ticker, "stock_data", _fetch)
     except Exception as e:
         return {"error": f"Error fetching stock data: {str(e)}", "shortName": ticker}
 
 
+
 def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
     """Fetch 6-month price history for meaningful support/resistance levels."""
-    try:
+    def _fetch():
         stock = yf.Ticker(ticker)
         hist = stock.history(period="6mo", auto_adjust=False)
         if hist.empty:
@@ -108,12 +160,15 @@ def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
             for _, row in hist.iterrows()
             if row.get(close_col) is not None
         ]
+
+    try:
+        return _with_cache_and_retry(ticker, "stock_history", _fetch)
     except Exception:
         return []
 
 
 def fetch_stock_news(ticker: str) -> List[Dict[str, Any]]:
-    try:
+    def _fetch():
         stock = yf.Ticker(ticker)
         news = getattr(stock, "news", []) or []
         
@@ -193,38 +248,33 @@ def fetch_stock_news(ticker: str) -> List[Dict[str, Any]]:
         # Sort by score descending
         scored_articles.sort(key=lambda x: x[0], reverse=True)
         return [art for _, art in scored_articles[:8]]
+
+    try:
+        return _with_cache_and_retry(ticker, "stock_news", _fetch)
     except Exception:
         return []
 
 
 def fetch_analyst_data(ticker: str) -> Dict[str, Any]:
     """Fetch analyst price targets and recommendation summary from yfinance."""
-    result: Dict[str, Any] = {
-        "mean_target": None,
-        "high_target": None,
-        "low_target": None,
-        "median_target": None,
-        "num_analysts": None,
-        "recommendation_key": None,
-        "recommendation_mean": None,
-        "strong_buy": None,
-        "buy": None,
-        "hold": None,
-        "sell": None,
-        "strong_sell": None,
-    }
-    try:
+    def _fetch():
         stock = yf.Ticker(ticker)
         info = stock.info or {}
 
-        # Price targets from info dict (most reliable)
-        result["mean_target"] = info.get("targetMeanPrice")
-        result["high_target"] = info.get("targetHighPrice")
-        result["low_target"] = info.get("targetLowPrice")
-        result["median_target"] = info.get("targetMedianPrice")
-        result["num_analysts"] = info.get("numberOfAnalystOpinions")
-        result["recommendation_key"] = info.get("recommendationKey")  # e.g. "buy", "hold"
-        result["recommendation_mean"] = info.get("recommendationMean")  # 1=Strong Buy, 5=Strong Sell
+        result = {
+            "mean_target": info.get("targetMeanPrice"),
+            "high_target": info.get("targetHighPrice"),
+            "low_target": info.get("targetLowPrice"),
+            "median_target": info.get("targetMedianPrice"),
+            "num_analysts": info.get("numberOfAnalystOpinions"),
+            "recommendation_key": info.get("recommendationKey"),  # e.g. "buy", "hold"
+            "recommendation_mean": info.get("recommendationMean"),  # 1=Strong Buy, 5=Strong Sell
+            "strong_buy": None,
+            "buy": None,
+            "hold": None,
+            "sell": None,
+            "strong_sell": None,
+        }
 
         # Analyst count breakdown from recommendations_summary if available
         try:
@@ -238,11 +288,26 @@ def fetch_analyst_data(ticker: str) -> Dict[str, Any]:
                 result["strong_sell"] = int(latest.get("strongSell", 0)) if not pd.isna(latest.get("strongSell", 0)) else None
         except Exception:
             pass
+        return result
 
+    try:
+        return _with_cache_and_retry(ticker, "analyst_data", _fetch)
     except Exception as e:
         print(f"[prefetch] analyst_data error for {ticker}: {e}")
-
-    return result
+        return {
+            "mean_target": None,
+            "high_target": None,
+            "low_target": None,
+            "median_target": None,
+            "num_analysts": None,
+            "recommendation_key": None,
+            "recommendation_mean": None,
+            "strong_buy": None,
+            "buy": None,
+            "hold": None,
+            "sell": None,
+            "strong_sell": None,
+        }
 
 
 def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
@@ -251,36 +316,41 @@ def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
     Returns SMA-20, SMA-50, RSI-14, MACD line/signal, and Bollinger Bands.
     Computing these here (not in the LLM) eliminates hallucination risk.
     """
-    result: Dict[str, Any] = {
-        "sma_20": None,
-        "sma_50": None,
-        "rsi_14": None,
-        "macd_line": None,
-        "macd_signal": None,
-        "macd_histogram": None,
-        "macd_crossover": None,  # "Bullish" | "Bearish" | "Neutral"
-        "bb_upper": None,
-        "bb_lower": None,
-        "bb_position": None,  # % position within bands (0=lower, 1=upper)
-        "price_vs_sma20": None,  # "above" | "below"
-        "price_vs_sma50": None,
-        "rsi_signal": None,  # "Overbought" | "Oversold" | "Neutral"
-        "fifty_two_week_position": None,  # % between 52-wk low and high
-        "avg_volume_ratio": None,  # today's volume vs 20d avg
-        "volatility_30d": None,
-    }
-    try:
+    def _fetch():
         stock = yf.Ticker(ticker)
         hist = stock.history(period="6mo", auto_adjust=True)
         if hist.empty or len(hist) < 20:
-            return result
+            return {
+                "sma_20": None, "sma_50": None, "rsi_14": None,
+                "macd_line": None, "macd_signal": None, "macd_histogram": None,
+                "macd_crossover": None, "bb_upper": None, "bb_lower": None, "bb_position": None,
+                "price_vs_sma20": None, "price_vs_sma50": None, "rsi_signal": None,
+                "fifty_two_week_position": None, "avg_volume_ratio": None, "volatility_30d": None
+            }
 
         closes = hist["Close"].dropna()
         if len(closes) < 14:
             print(f"[prefetch] Insufficient price history for {ticker} ({len(closes)} points) — skipping indicators")
-            return result
-        if len(closes) < 20:
-            print(f"[prefetch] Limited price history for {ticker} ({len(closes)} points) — some indicators may be unavailable")
+            raise Exception("Insufficient price history")
+
+        result = {
+            "sma_20": None,
+            "sma_50": None,
+            "rsi_14": None,
+            "macd_line": None,
+            "macd_signal": None,
+            "macd_histogram": None,
+            "macd_crossover": None,  # "Bullish" | "Bearish" | "Neutral"
+            "bb_upper": None,
+            "bb_lower": None,
+            "bb_position": None,  # % position within bands (0=lower, 1=upper)
+            "price_vs_sma20": None,  # "above" | "below"
+            "price_vs_sma50": None,
+            "rsi_signal": None,  # "Overbought" | "Oversold" | "Neutral"
+            "fifty_two_week_position": None,  # % between 52-wk low and high
+            "avg_volume_ratio": None,  # today's volume vs 20d avg
+            "volatility_30d": None,
+        }
 
         # SMA
         if len(closes) >= 20:
@@ -378,16 +448,23 @@ def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
             result["volatility_30d"] = round(float(annualized_vol), 4)
         else:
             result["volatility_30d"] = 0.0
+        return result
 
-
+    try:
+        return _with_cache_and_retry(ticker, "technical_indicators", _fetch)
     except Exception as e:
         print(f"[prefetch] technical_indicators error for {ticker}: {e}")
-
-    return result
+        return {
+            "sma_20": None, "sma_50": None, "rsi_14": None,
+            "macd_line": None, "macd_signal": None, "macd_histogram": None,
+            "macd_crossover": None, "bb_upper": None, "bb_lower": None, "bb_position": None,
+            "price_vs_sma20": None, "price_vs_sma50": None, "rsi_signal": None,
+            "fifty_two_week_position": None, "avg_volume_ratio": None, "volatility_30d": None
+        }
 
 
 def fetch_financial_data(ticker: str) -> Dict[str, Any]:
-    try:
+    def _fetch():
         stock = yf.Ticker(ticker)
         financials = stock.financials
         balance_sheet = stock.balance_sheet
@@ -412,6 +489,9 @@ def fetch_financial_data(ticker: str) -> Dict[str, Any]:
                 records.append(record)
 
         return {"records": records}
+
+    try:
+        return _with_cache_and_retry(ticker, "financial_data", _fetch)
     except Exception:
         return {"records": []}
 

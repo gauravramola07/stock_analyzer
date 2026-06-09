@@ -18,6 +18,8 @@ TICKER_FILE = os.path.join(tempfile.gettempdir(), "stock_analyzer_tickers.json")
 TICKER_CACHE = []
 RESULT_CACHE = {}
 RESULT_CACHE_TTL = 3600
+HISTORY_CACHE = {}
+HISTORY_CACHE_TTL = 300  # 5 minutes cache
 
 # ---------------------------------------------------------------------------
 # In-flight deduplication: one pipeline per ticker, N SSE subscribers.
@@ -194,35 +196,79 @@ async def search_tickers(q: str = "", limit: int = 0):
 
 
 @app.get("/api/stock/{ticker}/history")
-async def get_stock_history(ticker: str):
-    try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1mo")
+def get_stock_history(ticker: str):
+    now = time.time()
+    if ticker in HISTORY_CACHE:
+        cached_data, expiry = HISTORY_CACHE[ticker]
+        if now < expiry:
+            return cached_data
 
-        if hist.empty:
-            raise HTTPException(status_code=404, detail="No history found")
+    max_retries = 3
+    backoff_factor = 1.5
+    last_err = None
 
-        data = [
-            {"date": idx.strftime("%Y-%m-%d"), "price": round(float(row["Close"]), 2)}
-            for idx, row in hist.iterrows()
-            if row.get("Close") is not None
-        ]
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="1mo")
 
-        info = stock.info or {}
-        current = info.get("currentPrice") or info.get("regularMarketPrice") or 0
-        prev = info.get("previousClose") or current
-        change = ((current - prev) / prev * 100) if prev else 0
+            if hist.empty:
+                raise HTTPException(status_code=404, detail="No history found")
 
-        return {
-            "history": data,
-            "current_price": round(float(current), 2) if current is not None else 0,
-            "day_change_pct": round(float(change), 2),
-            "company_name": info.get("longName") or info.get("shortName") or ticker,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            data = [
+                {"date": idx.strftime("%Y-%m-%d"), "price": round(float(row["Close"]), 2)}
+                for idx, row in hist.iterrows()
+                if row.get("Close") is not None
+            ]
+
+            info = stock.info or {}
+            current = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+            prev = info.get("previousClose") or current
+            change = ((current - prev) / prev * 100) if prev else 0
+
+            result = {
+                "history": data,
+                "current_price": round(float(current), 2) if current is not None else 0,
+                "day_change_pct": round(float(change), 2),
+                "company_name": info.get("longName") or info.get("shortName") or ticker,
+            }
+            HISTORY_CACHE[ticker] = (result, now + HISTORY_CACHE_TTL)
+            return result
+        except HTTPException:
+            raise
+        except Exception as e:
+            last_err = e
+            err_msg = str(e)
+            is_rate_limit = (
+                "429" in err_msg
+                or "rate limit" in err_msg.lower()
+                or "too many requests" in err_msg.lower()
+                or "RateLimit" in type(e).__name__
+            )
+            if is_rate_limit and attempt < max_retries - 1:
+                sleep_time = backoff_factor ** attempt
+                print(f"[main] Rate limit hit for history of {ticker}. Retrying in {sleep_time:.2f}s...")
+                time.sleep(sleep_time)
+                continue
+            elif attempt < max_retries - 1:
+                time.sleep(0.5)
+                continue
+            else:
+                break
+
+    # If it failed after retries, determine appropriate exception
+    err_msg = str(last_err)
+    if (
+        "429" in err_msg
+        or "rate limit" in err_msg.lower()
+        or "too many requests" in err_msg.lower()
+        or "RateLimit" in type(last_err).__name__
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too Many Requests. Rate limited. Try after a while."
+        )
+    raise HTTPException(status_code=500, detail=str(last_err))
 
 
 def _extract_role(step_output) -> str:

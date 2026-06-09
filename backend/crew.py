@@ -73,7 +73,7 @@ def _get_free_llm():
         api_key=os.getenv("OPENAI_API_KEY", "YOUR_API_KEY"),
         base_url=api_base,
         temperature=0.1,
-        max_retries=5,  # Increased to automatically retry on 429 rate limits
+        max_retries=2,
     )
 
 
@@ -91,7 +91,7 @@ def _get_fast_llm():
         api_key=api_key,
         base_url=api_base,
         temperature=0.1,
-        max_retries=5,  # Increased to automatically retry on 429 rate limits
+        max_retries=2,
     )
 
 

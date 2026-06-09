@@ -36,6 +36,7 @@ dist/
 .env.production.local
 *.env
 
+
 # OS
 .DS_Store
 .DS_Store?
@@ -51,3 +52,6 @@ Thumbs.db
 .kilo
 *.swp
 *.swo
+.gitignore
+backend/.gitignore
+frontend/.gitignore
