@@ -8,6 +8,7 @@ from utils import _to_iso_date
 
 import time
 from yfinance import data
+data.HAS_CURL_CFFI = False
 
 yf.set_tz_cache_location("yfinance_cache")
 

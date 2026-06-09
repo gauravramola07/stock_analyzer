@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from crew import run_analysis
 from sse_starlette.event import ServerSentEvent
 import yfinance as yf
+from yfinance import data
+data.HAS_CURL_CFFI = False
 import json
 import asyncio
 import time
