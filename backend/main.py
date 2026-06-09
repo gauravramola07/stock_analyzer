@@ -203,8 +203,8 @@ def get_stock_history(ticker: str):
         if now < expiry:
             return cached_data
 
-    max_retries = 3
-    backoff_factor = 1.5
+    max_retries = 5
+    backoff_factor = 2.0
     last_err = None
 
     for attempt in range(max_retries):

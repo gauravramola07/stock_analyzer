@@ -25,7 +25,7 @@ def _with_cache_and_retry(ticker: str, cache_key: str, fetch_fn):
             return val
             
     # Retry configuration
-    max_retries = 3
+    max_retries = 5
     backoff_factor = 2.0
     last_err = None
     
@@ -498,16 +498,42 @@ def fetch_financial_data(ticker: str) -> Dict[str, Any]:
 
 async def prefetch_all(ticker: str) -> Dict[str, Any]:
     loop = asyncio.get_running_loop()
-    data_coro = loop.run_in_executor(None, fetch_stock_data, ticker)
-    history_coro = loop.run_in_executor(None, fetch_stock_history, ticker)
-    news_coro = loop.run_in_executor(None, fetch_stock_news, ticker)
-    financial_coro = loop.run_in_executor(None, fetch_financial_data, ticker)
-    analyst_coro = loop.run_in_executor(None, fetch_analyst_data, ticker)
-    indicators_coro = loop.run_in_executor(None, fetch_technical_indicators, ticker)
-
-    stock_data, history, news, financial_data, analyst_data, technical_indicators = await asyncio.gather(
-        data_coro, history_coro, news_coro, financial_coro, analyst_coro, indicators_coro
-    )
+    
+    # Check if we have cached results for all steps to avoid sequential delay
+    keys = ["stock_data", "stock_history", "stock_news", "financial_data", "analyst_data", "technical_indicators"]
+    now = time.time()
+    all_cached = True
+    for k in keys:
+        cache_key = f"{ticker}:{k}"
+        if cache_key not in _PREFETCH_CACHE or now >= _PREFETCH_CACHE[cache_key][1]:
+            all_cached = False
+            break
+            
+    if all_cached:
+        # Fetch concurrently from memory (instantaneous)
+        data_coro = loop.run_in_executor(None, fetch_stock_data, ticker)
+        history_coro = loop.run_in_executor(None, fetch_stock_history, ticker)
+        news_coro = loop.run_in_executor(None, fetch_stock_news, ticker)
+        financial_coro = loop.run_in_executor(None, fetch_financial_data, ticker)
+        analyst_coro = loop.run_in_executor(None, fetch_analyst_data, ticker)
+        indicators_coro = loop.run_in_executor(None, fetch_technical_indicators, ticker)
+        
+        stock_data, history, news, financial_data, analyst_data, technical_indicators = await asyncio.gather(
+            data_coro, history_coro, news_coro, financial_coro, analyst_coro, indicators_coro
+        )
+    else:
+        # Sequential execution with sleep to prevent Yahoo rate limits on cache misses
+        stock_data = await loop.run_in_executor(None, fetch_stock_data, ticker)
+        await asyncio.sleep(0.1)
+        history = await loop.run_in_executor(None, fetch_stock_history, ticker)
+        await asyncio.sleep(0.1)
+        news = await loop.run_in_executor(None, fetch_stock_news, ticker)
+        await asyncio.sleep(0.1)
+        financial_data = await loop.run_in_executor(None, fetch_financial_data, ticker)
+        await asyncio.sleep(0.1)
+        analyst_data = await loop.run_in_executor(None, fetch_analyst_data, ticker)
+        await asyncio.sleep(0.1)
+        technical_indicators = await loop.run_in_executor(None, fetch_technical_indicators, ticker)
 
     return {
         "stock_data": stock_data,
