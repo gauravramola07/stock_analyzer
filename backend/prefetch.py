@@ -7,8 +7,57 @@ from typing import Dict, Any, List, Optional
 from utils import _to_iso_date
 
 import time
+from yfinance import data
 
 yf.set_tz_cache_location("yfinance_cache")
+
+# Apply monkey patch to yfinance cookie/crumb fetcher to prevent rate limit storms
+_LAST_CRUMB_ATTEMPT = 0
+_CRUMB_COOLDOWN = 15.0  # 15 seconds cooldown between crumb fetch attempts if failing
+
+original_get_cookie_and_crumb = data.YfData._get_cookie_and_crumb
+
+def patched_get_cookie_and_crumb(self, timeout=30):
+    if self._crumb is not None:
+        return self._crumb, self._cookie_strategy
+        
+    global _LAST_CRUMB_ATTEMPT
+    now = time.time()
+    if now - _LAST_CRUMB_ATTEMPT < _CRUMB_COOLDOWN:
+        return None, self._cookie_strategy
+        
+    _LAST_CRUMB_ATTEMPT = now
+    
+    max_attempts = 3
+    backoff = 2.0
+    for attempt in range(max_attempts):
+        try:
+            return original_get_cookie_and_crumb(self, timeout)
+        except Exception as e:
+            err_msg = str(e)
+            is_rate_limit = (
+                "429" in err_msg 
+                or "rate limit" in err_msg.lower() 
+                or "too many requests" in err_msg.lower()
+                or "RateLimit" in type(e).__name__
+            )
+            if is_rate_limit and attempt < max_attempts - 1:
+                sleep_time = backoff ** attempt
+                print(f"[yfinance-patch] Cookie/crumb fetch rate-limited. Retrying in {sleep_time:.2f}s...")
+                time.sleep(sleep_time)
+                continue
+            raise
+
+data.YfData._get_cookie_and_crumb = patched_get_cookie_and_crumb
+
+# Pre-warm cookie/crumb cache sequentially on startup
+try:
+    print("[prefetch] Pre-warming yfinance cookie/crumb cache...")
+    _test_stock = yf.Ticker("AAPL")
+    _ = _test_stock.history(period="1d")
+    print("[prefetch] yfinance cookie/crumb cache pre-warmed successfully.")
+except Exception as e:
+    print(f"[prefetch] Warning: Failed to pre-warm cache: {e}")
 
 # Global memory cache for prefetch data to avoid rate limits
 _PREFETCH_CACHE = {}
