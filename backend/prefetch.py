@@ -66,7 +66,8 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
             "revenueGrowth": info.get("revenueGrowth"),
             "earningsGrowth": info.get("earningsGrowth"),
             "profitMargins": info.get("profitMargins"),
-            "operatingMargins": info.get("operatingMargins"),
+            "operatingMargins": f"{info.get('operatingMargins') * 100:.1f}%" if info.get('operatingMargins') is not None else None,
+            "operatingMargins_raw": info.get("operatingMargins"),  # Keep raw for calculations
             "returnOnEquity": info.get("returnOnEquity"),
             "debtToEquity": float(info.get("debtToEquity")) if info.get("debtToEquity") is not None else None,
             "currentRatio": info.get("currentRatio"),
@@ -276,7 +277,10 @@ def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
 
         closes = hist["Close"].dropna()
         if len(closes) < 14:
+            print(f"[prefetch] Insufficient price history for {ticker} ({len(closes)} points) — skipping indicators")
             return result
+        if len(closes) < 20:
+            print(f"[prefetch] Limited price history for {ticker} ({len(closes)} points) — some indicators may be unavailable")
 
         # SMA
         if len(closes) >= 20:

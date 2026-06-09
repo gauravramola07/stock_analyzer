@@ -124,6 +124,12 @@ Determine trend regime, momentum, support, resistance, and overbought/oversold c
 
 IMPORTANT: Use ONLY the data provided below. Do NOT invoke any tools or recalculate indicators.
 IMPORTANT: Support and resistance MUST be actual price levels visible in the history data, not guesses.
+IMPORTANT: If technical_indicators below is empty, None, or shows "N/A" for all fields, you MUST state explicitly:
+  - Set momentum to "Unknown"
+  - Set trend to "Insufficient Data"
+  - Set rsi_interpretation to "N/A"
+  - Set macd_interpretation to "N/A"
+  Do NOT infer momentum direction from price history alone when indicators are absent.
 
 {indicators_summary}
 

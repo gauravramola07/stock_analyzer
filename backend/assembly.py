@@ -356,6 +356,18 @@ def _validate_expert_output(expert_json: dict, current_price: float, analyst_dat
             else:
                 expert_json["recommendation"] = "Hold"
 
+    # --- Bug 2 fix: Bullish recommendation with negative implied return contradiction ---
+    recommendation = expert_json.get("recommendation", "")
+    if current_price and target_price and current_price > 0:
+        implied_return = (target_price - current_price) / current_price
+        if implied_return < -0.05 and recommendation in ("Strong Buy", "Buy", "Accumulate", "Speculative Buy"):
+            issues.append(f"Contradiction: {recommendation} with target implying {implied_return:.1%} return. Downgrading to Hold.")
+            print(f"[assembly] Contradiction: {recommendation} with target implying "
+                  f"{implied_return:.1%} return. Downgrading to Hold.")
+            recommendation = "Hold"
+            expert_json["recommendation"] = "Hold"
+            expert_json["confidence_score"] = min(expert_json.get("confidence_score", 0.5), 0.45)
+
     # --- reasoning ---
     reasoning = expert_json.get("reasoning", [])
     if not isinstance(reasoning, list) or len(reasoning) < 2:
@@ -536,6 +548,24 @@ def _validate_and_repair_target_prices(
             "six_months": {"price": p6_val, "rationale": r6_val},
             "twelve_months": {"price": p12_val, "rationale": r12_val},
         }
+
+    # --- Bug 3 fix: Monotonicity check for bullish calls ---
+    if p3 and p6 and p12 and recommendation in ("Strong Buy", "Buy", "Accumulate", "Speculative Buy"):
+        if not (p3 <= p6 <= p12):
+            print(f"[assembly] Descending targets for bullish call: "
+                  f"3M={p3} 6M={p6} 12M={p12}. Repairing to ascending sequence.")
+            # Force ascending: use 12M as anchor
+            if p3 < current_price:
+                spread = p12 - current_price if p12 > current_price else current_price * 0.1
+                p3 = round(current_price + spread * 0.35, 2)
+                p6 = round(current_price + spread * 0.65, 2)
+            else:
+                p6 = round((p3 + p12) / 2, 2)
+            # Ensure ascending order
+            if p3 > p6:
+                p3, p6 = p6, p3
+            r3 = r3 or f"Short-term target repaired to ${p3:.2f}."
+            r6 = r6 or f"Mid-term target interpolated to ${p6:.2f}."
 
     return {
         "three_months": {"price": p3, "rationale": r3 or "Short-term target price forecast."},
@@ -777,11 +807,24 @@ def assemble_final_result(ticker: str, pre_fetched: dict, agent_outputs: dict) -
     trend = analysis_json.get("trend", "N/A")
     trend = _validate_and_repair_trend(trend, technical_indicators_raw)
 
+    # --- Bug 4 fix: Validate support/resistance vs current price ---
+    raw_support = _safe_float(analysis_json.get("support")) if analysis_json.get("support") else None
+    raw_resistance = _safe_float(analysis_json.get("resistance")) if analysis_json.get("resistance") else None
+    if raw_resistance and current_price and current_price > raw_resistance * 1.05:
+        print(f"[assembly] Price {current_price} already above resistance {raw_resistance}. "
+              f"Promoting old resistance to support.")
+        raw_support = raw_resistance
+        raw_resistance = round(current_price * 1.15, 2)
+    if raw_support and current_price and raw_support > current_price * 1.05:
+        print(f"[assembly] Support {raw_support} is above current price {current_price}. "
+              f"Adjusting support downward.")
+        raw_support = round(current_price * 0.90, 2)
+
     technical_analysis = TechnicalAnalysis(
         trend=trend,
         volatility=vol,
-        support=_safe_float(analysis_json.get("support")) if analysis_json.get("support") else None,
-        resistance=_safe_float(analysis_json.get("resistance")) if analysis_json.get("resistance") else None,
+        support=raw_support,
+        resistance=raw_resistance,
         momentum=analysis_json.get("momentum"),
         rsi_interpretation=analysis_json.get("rsi_interpretation"),
         macd_interpretation=analysis_json.get("macd_interpretation"),

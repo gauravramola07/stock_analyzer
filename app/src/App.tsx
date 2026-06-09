@@ -261,7 +261,7 @@ export default function App() {
   const animatedPrice = useAnimatedNumber(data?.current_price, 800, 2);
   const animatedChange = useAnimatedNumber(data?.day_change_pct, 600, 2);
   const animatedTarget = useAnimatedNumber(data?.target_price, 800, 2);
-  const animatedConfidence = useAnimatedNumber(data?.confidence_score, 600, 1);
+  const animatedConfidence = useAnimatedNumber(data?.confidence_score ? data.confidence_score * 100 : undefined, 600, 1);
 
   return (
     <div className="aura-bg">
