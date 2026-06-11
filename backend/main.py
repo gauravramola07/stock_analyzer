@@ -64,14 +64,19 @@ RUNNING: dict[str, RunningAnalysis] = {}
 
 def _fetch_tickers_from_sources():
     """Fetch all tickers from NASDAQ trader + additional sources."""
-    all_symbols = []
+    all_tickers = {}
 
     try:
         nasdaq_url = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
         nasdaq_text = requests.get(nasdaq_url, timeout=30).text
         nasdaq_df = pd.read_csv(StringIO(nasdaq_text), sep="|")
-        nasdaq_symbols = nasdaq_df["Symbol"].dropna().astype(str).tolist()
-        all_symbols.extend(nasdaq_symbols)
+        
+        for _, row in nasdaq_df.iterrows():
+            sym = str(row.get("Symbol", "")).strip()
+            name = str(row.get("Security Name", "")).strip()
+            if sym and name and not sym.startswith("File Creation Time") and "." not in sym and "$" not in sym and len(sym) <= 6:
+                clean_name = name.split(" - ")[0].strip()
+                all_tickers[sym] = clean_name
     except Exception as e:
         print(f"NASDAQ fetch error: {e}")
 
@@ -79,29 +84,21 @@ def _fetch_tickers_from_sources():
         other_url = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
         other_text = requests.get(other_url, timeout=30).text
         other_df = pd.read_csv(StringIO(other_text), sep="|")
-        other_symbols = other_df["ACT Symbol"].dropna().astype(str).tolist()
-        all_symbols.extend(other_symbols)
+        
+        for _, row in other_df.iterrows():
+            sym = str(row.get("ACT Symbol", "")).strip()
+            name = str(row.get("Security Name", "")).strip()
+            if sym and name and not sym.startswith("File Creation Time") and "." not in sym and "$" not in sym and len(sym) <= 6:
+                clean_name = name.split(" - ")[0].strip()
+                all_tickers[sym] = clean_name
     except Exception as e:
         print(f"Otherlisted fetch error: {e}")
 
-    # Deduplicate, clean, sort
-    tickers = sorted(
-        list(
-            set(
-                [
-                    s.strip()
-                    for s in all_symbols
-                    if s and "." not in s and "$" not in s and len(s) <= 6
-                ]
-            )
-        )
-    )
-
-    return tickers
+    return all_tickers
 
 
 def _save_tickers_to_file(tickers):
-    """Persist ticker list to a local temp file."""
+    """Persist ticker dictionary to a local temp file."""
     try:
         with open(TICKER_FILE, "w") as f:
             json.dump(tickers, f)
@@ -111,7 +108,7 @@ def _save_tickers_to_file(tickers):
 
 
 def _load_tickers_from_file():
-    """Load ticker list from the local temp file."""
+    """Load ticker dictionary from the local temp file."""
     try:
         if os.path.exists(TICKER_FILE):
             with open(TICKER_FILE, "r") as f:
@@ -131,25 +128,53 @@ def load_all_tickers():
     if TICKER_CACHE:
         return TICKER_CACHE
 
-    # Try temp file first (fast)
     file_tickers = _load_tickers_from_file()
     if file_tickers:
-        TICKER_CACHE = file_tickers
+        TICKER_CACHE = [
+            {"symbol": sym, "name": name}
+            for sym, name in sorted(file_tickers.items())
+        ]
         return TICKER_CACHE
 
-    # Fresh fetch from sources
     tickers = _fetch_tickers_from_sources()
     if tickers:
-        TICKER_CACHE = tickers
+        TICKER_CACHE = [
+            {"symbol": sym, "name": name}
+            for sym, name in sorted(tickers.items())
+        ]
         _save_tickers_to_file(tickers)
     else:
-        # Ultimate fallback
-        TICKER_CACHE = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
-                        "AMD", "NFLX", "CRM", "ADBE", "PYPL", "UBER", "COIN",
-                        "INTC", "DIS", "BA", "JPM", "V", "MA", "WMT", "KO",
-                        "PEP", "PFE", "JNJ", "XOM", "CVX", "GS", "IBM", "ORCL"]
+        fallback_symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
+                            "AMD", "NFLX", "CRM", "ADBE", "PYPL", "UBER", "COIN",
+                            "INTC", "DIS", "BA", "JPM", "V", "MA", "WMT", "KO",
+                            "PEP", "PFE", "JNJ", "XOM", "CVX", "GS", "IBM", "ORCL"]
+        fallback_names = {
+            "AAPL": "Apple Inc.", "MSFT": "Microsoft Corporation", "NVDA": "NVIDIA Corporation",
+            "TSLA": "Tesla, Inc.", "AMZN": "Amazon.com, Inc.", "GOOGL": "Alphabet Inc.",
+            "META": "Meta Platforms, Inc.", "AMD": "Advanced Micro Devices, Inc.", "NFLX": "Netflix, Inc.",
+            "CRM": "Salesforce, Inc.", "ADBE": "Adobe Inc.", "PYPL": "PayPal Holdings, Inc.",
+            "UBER": "Uber Technologies, Inc.", "COIN": "Coinbase Global, Inc.", "INTC": "Intel Corporation",
+            "DIS": "The Walt Disney Company", "BA": "The Boeing Company", "JPM": "JPMorgan Chase & Co.",
+            "V": "Visa Inc.", "MA": "Mastercard Incorporated", "WMT": "Walmart Inc.",
+            "KO": "The Coca-Cola Company", "PEP": "PepsiCo, Inc.", "PFE": "Pfizer Inc.",
+            "JNJ": "Johnson & Johnson", "XOM": "Exxon Mobil Corporation", "CVX": "Chevron Corporation",
+            "GS": "The Goldman Sachs Group, Inc.", "IBM": "International Business Machines Corporation",
+            "ORCL": "Oracle Corporation"
+        }
+        TICKER_CACHE = [
+            {"symbol": s, "name": fallback_names.get(s, s)}
+            for s in fallback_symbols
+        ]
 
     return TICKER_CACHE
+
+
+def get_company_name_from_cache(ticker: str) -> str:
+    """Lookup company name from loaded ticker cache."""
+    for item in TICKER_CACHE:
+        if item["symbol"].upper() == ticker.upper():
+            return item["name"]
+    return ticker
 
 
 @asynccontextmanager
@@ -185,14 +210,17 @@ async def get_all_tickers():
 
 @app.get("/api/tickers/search")
 async def search_tickers(q: str = "", limit: int = 0):
-    """Search tickers. limit=0 means return all matches."""
+    """Search tickers by symbol or name. limit=0 means return all matches."""
     tickers = load_all_tickers()
 
     if not q:
         return tickers
 
     q = q.upper()
-    matches = [t for t in tickers if q in t]
+    matches = [
+        t for t in tickers
+        if q in t["symbol"].upper() or q in t["name"].upper()
+    ]
 
     if limit and limit > 0:
         return matches[:limit]
@@ -252,7 +280,7 @@ def get_stock_history(ticker: str):
                 "history": data,
                 "current_price": round(current_val, 2),
                 "day_change_pct": round(change_val, 2),
-                "company_name": info.get("longName") or info.get("shortName") or ticker,
+                "company_name": info.get("longName") or info.get("shortName") or get_company_name_from_cache(ticker),
             }
             result = clean_json_data(result)
             HISTORY_CACHE[ticker] = (result, now + HISTORY_CACHE_TTL)

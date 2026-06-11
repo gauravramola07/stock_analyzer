@@ -130,6 +130,20 @@ def _safe_get(df: pd.DataFrame, label: str, col) -> Any:
     return float(val)
 
 
+def _get_company_name_fallback(ticker: str) -> str:
+    try:
+        import os, json, tempfile
+        ticker_file = os.path.join(tempfile.gettempdir(), "stock_analyzer_tickers.json")
+        if os.path.exists(ticker_file):
+            with open(ticker_file, "r") as f:
+                mapping = json.load(f)
+            if isinstance(mapping, dict) and ticker in mapping:
+                return mapping[ticker]
+    except Exception:
+        pass
+    return ticker
+
+
 def fetch_stock_data(ticker: str) -> Dict[str, Any]:
     def _fetch():
         stock = yf.Ticker(ticker, session=_SESSION)
@@ -138,13 +152,15 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         except Exception as e:
             print(f"[prefetch] Warning: Failed to fetch stock.info for {ticker}: {e}")
             info = {}
-        dividend_yield = info.get("dividendYield")
-        if dividend_yield is None:
-            dividend_yield = info.get("trailingAnnualDividendYield")
-            if dividend_yield is not None:
-                dividend_yield = float(dividend_yield) * 100.0
-        current = info.get("currentPrice") or info.get("regularMarketPrice")
-        if current is None:
+
+        fast = {}
+        try:
+            fast = stock.fast_info
+        except Exception as fe:
+            print(f"[prefetch] Warning: Failed to get fast_info for {ticker}: {fe}")
+
+        current = info.get("currentPrice") or info.get("regularMarketPrice") or fast.get("lastPrice")
+        if current is None or current == 0.0:
             try:
                 hist = stock.history(period="1d")
                 if not hist.empty:
@@ -154,27 +170,78 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         if current is None:
             current = 0.0
 
-        prev = info.get("previousClose") or current
+        prev = info.get("previousClose") or fast.get("previousClose") or current
         day_change_pct = ((current - prev) / prev * 100) if prev and current else 0
-        quote_type = info.get("quoteType", "EQUITY")
+        quote_type = info.get("quoteType") or fast.get("quoteType") or "EQUITY"
+
+        dividend_yield = info.get("dividendYield")
+        if dividend_yield is None:
+            dividend_yield = info.get("trailingAnnualDividendYield")
+            if dividend_yield is not None:
+                dividend_yield = float(dividend_yield) * 100.0
+
+        # Fallback to compute dividend yield from dividends history
+        if dividend_yield is None and current > 0:
+            try:
+                dividends = stock.dividends
+                if not dividends.empty:
+                    now_ts = pd.Timestamp.now(tz=dividends.index.tz)
+                    one_year_ago = now_ts - pd.Timedelta(days=365)
+                    last_year_divs = dividends[dividends.index >= one_year_ago]
+                    if not last_year_divs.empty:
+                        annual_div = float(last_year_divs.sum())
+                        dividend_yield = (annual_div / current) * 100.0
+            except Exception as div_err:
+                print(f"[prefetch] Warning: Failed to calculate dividend yield fallback for {ticker}: {div_err}")
+
+        # Fallback to compute trailingPE and epsTrailingTwelveMonths from financials & fast_info
+        eps_trailing = info.get("epsTrailingTwelveMonths")
+        pe_ratio = info.get("trailingPE")
+        if (eps_trailing is None or pe_ratio is None) and current > 0:
+            try:
+                financials = stock.financials
+                shares = fast.get("shares")
+                if financials is not None and not financials.empty and shares and shares > 0:
+                    net_income_labels = ["Net Income Common Stockholders", "Net Income"]
+                    net_income_val = None
+                    for label in net_income_labels:
+                        if label in financials.index:
+                            val = financials.loc[label].iloc[0]
+                            if pd.notna(val):
+                                net_income_val = float(val)
+                                break
+                    if net_income_val is not None:
+                        eps_trailing = net_income_val / shares
+                        if eps_trailing > 0:
+                            pe_ratio = current / eps_trailing
+            except Exception as fin_err:
+                print(f"[prefetch] Warning: Failed to calculate PE ratio fallback for {ticker}: {fin_err}")
+
+        # Fallback values from fast_info
+        market_cap = info.get("marketCap") or fast.get("marketCap")
+        fifty_two_high = info.get("fiftyTwoWeekHigh") or fast.get("yearHigh") or current
+        fifty_two_low = info.get("fiftyTwoWeekLow") or fast.get("yearLow") or current
+        volume = info.get("volume") or fast.get("lastVolume")
+        average_volume = info.get("averageVolume") or fast.get("threeMonthAverageVolume")
+
         return {
             "quoteType": quote_type,
             "isETF": quote_type in ("ETF", "MUTUALFUND", "INDEX"),
             "currentPrice": current,
             "previousClose": prev,
             "dayChangePct": round(float(day_change_pct), 2) if day_change_pct else 0,
-            "marketCap": info.get("marketCap"),
-            "trailingPE": info.get("trailingPE"),
+            "marketCap": market_cap,
+            "trailingPE": pe_ratio,
             "forwardPE": info.get("forwardPE"),
             "priceToBook": info.get("priceToBook"),
             "priceToSalesTrailing12Months": info.get("priceToSalesTrailing12Months"),
-            "beta": info.get("beta"),
+            "beta": info.get("beta") or 1.0,  # default to 1.0 if missing
             "dividendYield": dividend_yield,
-            "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
-            "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
-            "volume": info.get("volume"),
-            "averageVolume": info.get("averageVolume"),
-            "epsTrailingTwelveMonths": info.get("epsTrailingTwelveMonths"),
+            "fiftyTwoWeekHigh": fifty_two_high,
+            "fiftyTwoWeekLow": fifty_two_low,
+            "volume": volume,
+            "averageVolume": average_volume,
+            "epsTrailingTwelveMonths": eps_trailing,
             "epsForward": info.get("epsForward"),
             "revenueGrowth": info.get("revenueGrowth"),
             "earningsGrowth": info.get("earningsGrowth"),
@@ -185,7 +252,7 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
             "debtToEquity": float(info.get("debtToEquity")) if info.get("debtToEquity") is not None else None,
             "currentRatio": info.get("currentRatio"),
             "longBusinessSummary": info.get("longBusinessSummary", "N/A"),
-            "shortName": info.get("shortName") or info.get("longName") or ticker,
+            "shortName": info.get("shortName") or info.get("longName") or _get_company_name_fallback(ticker),
             "sector": info.get("sector", ""),
             "industry": info.get("industry", ""),
             "country": info.get("country", ""),

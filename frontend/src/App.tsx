@@ -205,11 +205,16 @@ const fadeScale = {
   animate: { opacity: 1, scale: 1, transition: { duration: 0.4, ease: EASE_OUT } },
 };
 
+interface TickerItem {
+  symbol: string;
+  name: string;
+}
+
 export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [view, setView] = useState<ViewState>('landing');
   const [query, setQuery] = useState('');
-const [tickers, setTickers] = useState<string[]>([]);
+  const [tickers, setTickers] = useState<TickerItem[]>([]);
   const [allTickersLoaded, setAllTickersLoaded] = useState(false);
   const [tickerCount, setTickerCount] = useState(0);
   const [selectedTicker, setSelectedTicker] = useState('');
@@ -223,7 +228,7 @@ const [tickers, setTickers] = useState<string[]>([]);
     risk: 'idle', expert: 'idle', complete: 'idle',
   });
   const dataReceivedRef = useRef(false);
-
+ 
 useEffect(() => {
     axios.get(`${API_BASE}/tickers`)
       .then((res) => {
@@ -232,12 +237,33 @@ useEffect(() => {
         setTickerCount(data.count || (data.tickers || []).length);
         setAllTickersLoaded(true);
       })
-      .catch(() => setTickers(['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'NFLX', 'CRM', 'ADBE', 'PYPL', 'UBER', 'COIN', 'INTC', 'DIS', 'BA', 'JPM', 'V', 'MA', 'WMT', 'KO', 'PEP', 'PFE', 'JNJ', 'XOM', 'CVX', 'GS', 'IBM', 'ORCL', 'CRM', 'NOW', 'SNOW', 'PLTR', 'RDDT', 'ARM', 'SMCI', 'DDOG', 'NET', 'FSLY']));
+      .catch(() => {
+        const fallbackSymbols = ['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'NFLX', 'CRM', 'ADBE', 'PYPL', 'UBER', 'COIN', 'INTC', 'DIS', 'BA', 'JPM', 'V', 'MA', 'WMT', 'KO', 'PEP', 'PFE', 'JNJ', 'XOM', 'CVX', 'GS', 'IBM', 'ORCL', 'CRM', 'NOW', 'SNOW', 'PLTR', 'RDDT', 'ARM', 'SMCI', 'DDOG', 'NET', 'FSLY'];
+        const fallbackNames: Record<string, string> = {
+          AAPL: "Apple Inc.", NVDA: "NVIDIA Corporation", TSLA: "Tesla, Inc.",
+          MSFT: "Microsoft Corporation", AMZN: "Amazon.com, Inc.", GOOGL: "Alphabet Inc.",
+          META: "Meta Platforms, Inc.", AMD: "Advanced Micro Devices, Inc.", NFLX: "Netflix, Inc.",
+          CRM: "Salesforce, Inc.", ADBE: "Adobe Inc.", PYPL: "PayPal Holdings, Inc.",
+          UBER: "Uber Technologies, Inc.", COIN: "Coinbase Global, Inc.", INTC: "Intel Corporation",
+          DIS: "The Walt Disney Company", BA: "The Boeing Company", JPM: "JPMorgan Chase & Co.",
+          V: "Visa Inc.", MA: "Mastercard Incorporated", WMT: "Walmart Inc.",
+          KO: "The Coca-Cola Company", PEP: "PepsiCo, Inc.", PFE: "Pfizer Inc.",
+          JNJ: "Johnson & Johnson", XOM: "Exxon Mobil Corporation", CVX: "Chevron Corporation",
+          GS: "The Goldman Sachs Group, Inc.", IBM: "International Business Machines Corporation",
+          ORCL: "Oracle Corporation", NOW: "ServiceNow, Inc.", SNOW: "Snowflake Inc.",
+          PLTR: "Palantir Technologies Inc.", RDDT: "Reddit, Inc.", ARM: "Arm Holdings plc",
+          SMCI: "Super Micro Computer, Inc.", DDOG: "Datadog, Inc.", NET: "Cloudflare, Inc.",
+          FSLY: "Fastly, Inc."
+        };
+        setTickers(fallbackSymbols.map(s => ({ symbol: s, name: fallbackNames[s] || s })));
+      });
   }, []);
 
   const filteredTickers = useMemo(() => {
     const q = query.trim().toUpperCase();
-    return q ? tickers.filter((t) => t.includes(q)) : tickers;
+    return q
+      ? tickers.filter((t) => t.symbol.toUpperCase().includes(q) || t.name.toUpperCase().includes(q))
+      : tickers;
   }, [query, tickers]);
 
   // When searching, show ALL matches. When browsing, show a scrollable subset.
@@ -550,7 +576,7 @@ useEffect(() => {
                   scrollbarWidth: 'thin',
                 }}
               >
-                {visibleTickers.map((symbol) => (
+                {visibleTickers.map(({ symbol, name }) => (
                   <button
                     key={symbol}
                     className="void-card void-card-interactive"
@@ -566,10 +592,14 @@ useEffect(() => {
                     </div>
                     <div style={{
                       fontFamily: "'Inter', sans-serif",
-                      fontSize: 10, letterSpacing: '0.2em',
-                      color: 'var(--text-muted)', textTransform: 'uppercase',
-                    }}>
-                      Analyze
+                      fontSize: 10,
+                      color: 'var(--text-muted)',
+                      textOverflow: 'ellipsis',
+                      overflow: 'hidden',
+                      whiteSpace: 'nowrap',
+                      width: '100%',
+                    }} title={name}>
+                      {name || 'Analyze'}
                     </div>
                   </button>
                 ))}
