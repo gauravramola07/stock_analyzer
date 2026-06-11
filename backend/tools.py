@@ -49,6 +49,7 @@ class StockHistoryTool(BaseTool):
 
     def _run(self, ticker: str) -> List[Dict[str, Any]]:
         try:
+            import math
             stock = yf.Ticker(ticker)
             hist = stock.history(period="1mo", auto_adjust=False)
 
@@ -68,7 +69,7 @@ class StockHistoryTool(BaseTool):
             return [
                 {"date": row[date_column], "price": round(float(row[close_col]), 2)}
                 for _, row in hist.iterrows()
-                if row.get(close_col) is not None
+                if row.get(close_col) is not None and math.isfinite(float(row[close_col]))
             ]
         except Exception as e:
             return [{"error": str(e)}]

@@ -10,11 +10,14 @@ import asyncio
 import time
 import os
 import tempfile
+import math
 from contextlib import asynccontextmanager
 from sse_starlette.sse import EventSourceResponse
 import pandas as pd
 import requests
 from io import StringIO
+from utils import clean_float, clean_json_data
+
 
 TICKER_FILE = os.path.join(tempfile.gettempdir(), "stock_analyzer_tickers.json")
 TICKER_CACHE = []
@@ -220,20 +223,25 @@ def get_stock_history(ticker: str):
             data = [
                 {"date": idx.strftime("%Y-%m-%d"), "price": round(float(row["Close"]), 2)}
                 for idx, row in hist.iterrows()
-                if row.get("Close") is not None
+                if row.get("Close") is not None and math.isfinite(float(row["Close"]))
             ]
 
             info = stock.info or {}
-            current = info.get("currentPrice") or info.get("regularMarketPrice") or 0
-            prev = info.get("previousClose") or current
-            change = ((current - prev) / prev * 100) if prev else 0
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            current_val = clean_float(current, 0.0)
+            prev = info.get("previousClose")
+            prev_val = clean_float(prev, current_val)
+            
+            change = ((current_val - prev_val) / prev_val * 100) if prev_val else 0.0
+            change_val = clean_float(change, 0.0)
 
             result = {
                 "history": data,
-                "current_price": round(float(current), 2) if current is not None else 0,
-                "day_change_pct": round(float(change), 2),
+                "current_price": round(current_val, 2),
+                "day_change_pct": round(change_val, 2),
                 "company_name": info.get("longName") or info.get("shortName") or ticker,
             }
+            result = clean_json_data(result)
             HISTORY_CACHE[ticker] = (result, now + HISTORY_CACHE_TTL)
             return result
         except HTTPException:

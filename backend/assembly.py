@@ -977,4 +977,6 @@ def assemble_final_result(ticker: str, pre_fetched: dict, agent_outputs: dict) -
     )
 
     final_dict = final.model_dump() if hasattr(final, "model_dump") else final.dict()
+    from utils import clean_json_data
+    final_dict = clean_json_data(final_dict)
     return json.dumps(final_dict, indent=2)

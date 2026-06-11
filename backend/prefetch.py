@@ -4,7 +4,8 @@ import requests_cache
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
-from utils import _to_iso_date
+from utils import _to_iso_date, clean_json_data
+import math
 
 import time
 from yfinance import data
@@ -205,10 +206,10 @@ def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
             {
                 "date": row[date_column],
                 "price": round(float(row[close_col]), 2),
-                "volume": int(row[volume_col]) if volume_col and row.get(volume_col) is not None else None,
+                "volume": int(row[volume_col]) if volume_col and row.get(volume_col) is not None and math.isfinite(float(row[volume_col])) else None,
             }
             for _, row in hist.iterrows()
-            if row.get(close_col) is not None
+            if row.get(close_col) is not None and math.isfinite(float(row[close_col]))
         ]
 
     try:
@@ -585,7 +586,7 @@ async def prefetch_all(ticker: str) -> Dict[str, Any]:
         await asyncio.sleep(0.1)
         technical_indicators = await loop.run_in_executor(None, fetch_technical_indicators, ticker)
 
-    return {
+    res = {
         "stock_data": stock_data,
         "history": history,
         "news": news,
@@ -593,3 +594,4 @@ async def prefetch_all(ticker: str) -> Dict[str, Any]:
         "analyst_data": analyst_data,
         "technical_indicators": technical_indicators,
     }
+    return clean_json_data(res)
