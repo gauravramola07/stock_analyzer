@@ -1,7 +1,7 @@
 import yfinance as yf
 from crewai.tools import BaseTool
 from typing import Dict, Any, List
-from utils import _to_iso_date
+from utils import _to_iso_date, _SESSION
 
 try:
     from langchain_community.tools import DuckDuckGoSearchRun
@@ -19,8 +19,12 @@ class StockDataTool(BaseTool):
 
     def _run(self, ticker: str) -> Dict[str, Any]:
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info or {}
+            stock = yf.Ticker(ticker, session=_SESSION)
+            try:
+                info = stock.info or {}
+            except Exception as e:
+                print(f"[tools] Warning: Failed to fetch stock.info for {ticker} in StockDataTool: {e}")
+                info = {}
             dividend_yield = info.get("dividendYield")
             if dividend_yield is None:
                 dividend_yield = info.get("trailingAnnualDividendYield")
@@ -50,7 +54,7 @@ class StockHistoryTool(BaseTool):
     def _run(self, ticker: str) -> List[Dict[str, Any]]:
         try:
             import math
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(ticker, session=_SESSION)
             hist = stock.history(period="1mo", auto_adjust=False)
 
             if hist.empty:
@@ -81,7 +85,7 @@ class StockNewsTool(BaseTool):
 
     def _run(self, ticker: str) -> List[Dict[str, Any]]:
         try:
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(ticker, session=_SESSION)
             news = getattr(stock, "news", []) or []
             cleaned: List[Dict[str, Any]] = []
 

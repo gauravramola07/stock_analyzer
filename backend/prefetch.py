@@ -4,7 +4,7 @@ import requests_cache
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
-from utils import _to_iso_date, clean_json_data
+from utils import _to_iso_date, clean_json_data, _SESSION
 import math
 
 import time
@@ -55,7 +55,7 @@ data.YfData._get_cookie_and_crumb = patched_get_cookie_and_crumb
 # Pre-warm cookie/crumb cache sequentially on startup
 try:
     print("[prefetch] Pre-warming yfinance cookie/crumb cache...")
-    _test_stock = yf.Ticker("AAPL")
+    _test_stock = yf.Ticker("AAPL", session=_SESSION)
     _ = _test_stock.history(period="1d")
     print("[prefetch] yfinance cookie/crumb cache pre-warmed successfully.")
 except Exception as e:
@@ -132,14 +132,28 @@ def _safe_get(df: pd.DataFrame, label: str, col) -> Any:
 
 def fetch_stock_data(ticker: str) -> Dict[str, Any]:
     def _fetch():
-        stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        stock = yf.Ticker(ticker, session=_SESSION)
+        try:
+            info = stock.info or {}
+        except Exception as e:
+            print(f"[prefetch] Warning: Failed to fetch stock.info for {ticker}: {e}")
+            info = {}
         dividend_yield = info.get("dividendYield")
         if dividend_yield is None:
             dividend_yield = info.get("trailingAnnualDividendYield")
             if dividend_yield is not None:
                 dividend_yield = float(dividend_yield) * 100.0
         current = info.get("currentPrice") or info.get("regularMarketPrice")
+        if current is None:
+            try:
+                hist = stock.history(period="1d")
+                if not hist.empty:
+                    current = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
+        if current is None:
+            current = 0.0
+
         prev = info.get("previousClose") or current
         day_change_pct = ((current - prev) / prev * 100) if prev and current else 0
         quote_type = info.get("quoteType", "EQUITY")
@@ -190,7 +204,7 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
 def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
     """Fetch 6-month price history for meaningful support/resistance levels."""
     def _fetch():
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_SESSION)
         hist = stock.history(period="6mo", auto_adjust=False)
         if hist.empty:
             return []
@@ -220,7 +234,7 @@ def fetch_stock_history(ticker: str) -> List[Dict[str, Any]]:
 
 def fetch_stock_news(ticker: str) -> List[Dict[str, Any]]:
     def _fetch():
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_SESSION)
         news = getattr(stock, "news", []) or []
         
         # Get keywords for filtering relevance
@@ -309,8 +323,12 @@ def fetch_stock_news(ticker: str) -> List[Dict[str, Any]]:
 def fetch_analyst_data(ticker: str) -> Dict[str, Any]:
     """Fetch analyst price targets and recommendation summary from yfinance."""
     def _fetch():
-        stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        stock = yf.Ticker(ticker, session=_SESSION)
+        try:
+            info = stock.info or {}
+        except Exception as e:
+            print(f"[prefetch] Warning: Failed to fetch analyst stock.info for {ticker}: {e}")
+            info = {}
 
         result = {
             "mean_target": info.get("targetMeanPrice"),
@@ -368,7 +386,7 @@ def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
     Computing these here (not in the LLM) eliminates hallucination risk.
     """
     def _fetch():
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_SESSION)
         hist = stock.history(period="6mo", auto_adjust=True)
         if hist.empty or len(hist) < 20:
             return {
@@ -478,7 +496,11 @@ def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
                     result["avg_volume_ratio"] = round(today_vol / avg_vol, 2)
 
         # 52-week position
-        info = stock.info or {}
+        try:
+            info = stock.info or {}
+        except Exception as e:
+            print(f"[prefetch] Warning: Failed to fetch technical stock.info for {ticker}: {e}")
+            info = {}
         high_52 = info.get("fiftyTwoWeekHigh")
         low_52 = info.get("fiftyTwoWeekLow")
         if high_52 and low_52 and (high_52 - low_52) > 0:
@@ -516,7 +538,7 @@ def fetch_technical_indicators(ticker: str) -> Dict[str, Any]:
 
 def fetch_financial_data(ticker: str) -> Dict[str, Any]:
     def _fetch():
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_SESSION)
         financials = stock.financials
         balance_sheet = stock.balance_sheet
         cashflow = stock.cashflow

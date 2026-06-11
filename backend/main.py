@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 import pandas as pd
 import requests
 from io import StringIO
-from utils import clean_float, clean_json_data
+from utils import clean_float, clean_json_data, _SESSION
 
 
 TICKER_FILE = os.path.join(tempfile.gettempdir(), "stock_analyzer_tickers.json")
@@ -214,7 +214,7 @@ def get_stock_history(ticker: str):
 
     for attempt in range(max_retries):
         try:
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(ticker, session=_SESSION)
             hist = stock.history(period="1mo")
 
             if hist.empty:
@@ -226,10 +226,23 @@ def get_stock_history(ticker: str):
                 if row.get("Close") is not None and math.isfinite(float(row["Close"]))
             ]
 
-            info = stock.info or {}
+            try:
+                info = stock.info or {}
+            except Exception as e:
+                print(f"[main] Warning: Failed to fetch stock.info for {ticker}: {e}")
+                info = {}
+
             current = info.get("currentPrice") or info.get("regularMarketPrice")
-            current_val = clean_float(current, 0.0)
+            if current is None and len(data) > 0:
+                current = data[-1]["price"]
+                
             prev = info.get("previousClose")
+            if prev is None and len(data) > 1:
+                prev = data[-2]["price"]
+            elif prev is None:
+                prev = current
+                
+            current_val = clean_float(current, 0.0)
             prev_val = clean_float(prev, current_val)
             
             change = ((current_val - prev_val) / prev_val * 100) if prev_val else 0.0
