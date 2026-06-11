@@ -19,7 +19,8 @@ from io import StringIO
 from utils import clean_float, clean_json_data, _SESSION
 
 
-TICKER_FILE = os.path.join(tempfile.gettempdir(), "stock_analyzer_tickers.json")
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+TICKER_FILE = os.path.join(BACKEND_DIR, "tickers_list.json")
 TICKER_CACHE = []
 RESULT_CACHE = {}
 RESULT_CACHE_TTL = 3600
@@ -122,7 +123,7 @@ def _load_tickers_from_file():
 
 
 def load_all_tickers():
-    """Return all tickers — from memory cache, temp file, or fresh fetch."""
+    """Return all tickers — from local tickers_list.json or fallback."""
     global TICKER_CACHE
 
     if TICKER_CACHE:
@@ -136,35 +137,41 @@ def load_all_tickers():
         ]
         return TICKER_CACHE
 
-    tickers = _fetch_tickers_from_sources()
-    if tickers:
-        TICKER_CACHE = [
-            {"symbol": sym, "name": name}
-            for sym, name in sorted(tickers.items())
-        ]
-        _save_tickers_to_file(tickers)
-    else:
-        fallback_symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
-                            "AMD", "NFLX", "CRM", "ADBE", "PYPL", "UBER", "COIN",
-                            "INTC", "DIS", "BA", "JPM", "V", "MA", "WMT", "KO",
-                            "PEP", "PFE", "JNJ", "XOM", "CVX", "GS", "IBM", "ORCL"]
-        fallback_names = {
-            "AAPL": "Apple Inc.", "MSFT": "Microsoft Corporation", "NVDA": "NVIDIA Corporation",
-            "TSLA": "Tesla, Inc.", "AMZN": "Amazon.com, Inc.", "GOOGL": "Alphabet Inc.",
-            "META": "Meta Platforms, Inc.", "AMD": "Advanced Micro Devices, Inc.", "NFLX": "Netflix, Inc.",
-            "CRM": "Salesforce, Inc.", "ADBE": "Adobe Inc.", "PYPL": "PayPal Holdings, Inc.",
-            "UBER": "Uber Technologies, Inc.", "COIN": "Coinbase Global, Inc.", "INTC": "Intel Corporation",
-            "DIS": "The Walt Disney Company", "BA": "The Boeing Company", "JPM": "JPMorgan Chase & Co.",
-            "V": "Visa Inc.", "MA": "Mastercard Incorporated", "WMT": "Walmart Inc.",
-            "KO": "The Coca-Cola Company", "PEP": "PepsiCo, Inc.", "PFE": "Pfizer Inc.",
-            "JNJ": "Johnson & Johnson", "XOM": "Exxon Mobil Corporation", "CVX": "Chevron Corporation",
-            "GS": "The Goldman Sachs Group, Inc.", "IBM": "International Business Machines Corporation",
-            "ORCL": "Oracle Corporation"
-        }
-        TICKER_CACHE = [
-            {"symbol": s, "name": fallback_names.get(s, s)}
-            for s in fallback_symbols
-        ]
+    # Fresh fetch fallback if file is missing (unlikely in production)
+    try:
+        tickers = _fetch_tickers_from_sources()
+        if tickers:
+            TICKER_CACHE = [
+                {"symbol": sym, "name": name}
+                for sym, name in sorted(tickers.items())
+            ]
+            _save_tickers_to_file(tickers)
+            return TICKER_CACHE
+    except Exception as e:
+        print(f"Error fetching tickers online fallback: {e}")
+
+    # Ultimate hardcoded fallback
+    fallback_symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
+                        "AMD", "NFLX", "CRM", "ADBE", "PYPL", "UBER", "COIN",
+                        "INTC", "DIS", "BA", "JPM", "V", "MA", "WMT", "KO",
+                        "PEP", "PFE", "JNJ", "XOM", "CVX", "GS", "IBM", "ORCL"]
+    fallback_names = {
+        "AAPL": "Apple Inc.", "MSFT": "Microsoft Corporation", "NVDA": "NVIDIA Corporation",
+        "TSLA": "Tesla, Inc.", "AMZN": "Amazon.com, Inc.", "GOOGL": "Alphabet Inc.",
+        "META": "Meta Platforms, Inc.", "AMD": "Advanced Micro Devices, Inc.", "NFLX": "Netflix, Inc.",
+        "CRM": "Salesforce, Inc.", "ADBE": "Adobe Inc.", "PYPL": "PayPal Holdings, Inc.",
+        "UBER": "Uber Technologies, Inc.", "COIN": "Coinbase Global, Inc.", "INTC": "Intel Corporation",
+        "DIS": "The Walt Disney Company", "BA": "The Boeing Company", "JPM": "JPMorgan Chase & Co.",
+        "V": "Visa Inc.", "MA": "Mastercard Incorporated", "WMT": "Walmart Inc.",
+        "KO": "The Coca-Cola Company", "PEP": "PepsiCo, Inc.", "PFE": "Pfizer Inc.",
+        "JNJ": "Johnson & Johnson", "XOM": "Exxon Mobil Corporation", "CVX": "Chevron Corporation",
+        "GS": "The Goldman Sachs Group, Inc.", "IBM": "International Business Machines Corporation",
+        "ORCL": "Oracle Corporation"
+    }
+    TICKER_CACHE = [
+        {"symbol": s, "name": fallback_names.get(s, s)}
+        for s in fallback_symbols
+    ]
 
     return TICKER_CACHE
 

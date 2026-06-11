@@ -24,6 +24,16 @@ import DataCell from './components/DataCell';
 import NewsCard from './components/NewsCard';
 import ReasoningItem from './components/ReasoningItem';
 import EmptyState from './components/EmptyState';
+import tickersData from './data/tickers_list.json';
+
+export interface TickerItem {
+  symbol: string;
+  name: string;
+}
+
+const staticTickers: TickerItem[] = Object.entries(tickersData as Record<string, string>).map(
+  ([symbol, name]) => ({ symbol, name })
+);
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 export type ViewState = 'landing' | 'select' | 'dashboard';
@@ -160,7 +170,7 @@ export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [view, setView] = useState<ViewState>('landing');
   const [query, setQuery] = useState('');
-  const [tickers, setTickers] = useState<string[]>([]);
+  const [tickers, setTickers] = useState<TickerItem[]>(staticTickers);
   const [selectedTicker, setSelectedTicker] = useState('');
   const [data, setData] = useState<FinalData | null>(null);
   const [history, setHistory] = useState<{ date: string; price: number }[]>([]);
@@ -177,12 +187,15 @@ export default function App() {
   useEffect(() => {
     axios.get(`${API_BASE}/tickers/search`)
       .then((res) => setTickers(res.data))
-      .catch(() => setTickers(['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'NFLX', 'CRM', 'ADBE', 'PYPL', 'UBER', 'COIN', 'INTC', 'DIS', 'BA', 'JPM', 'V', 'MA', 'WMT', 'KO', 'PEP', 'PFE', 'JNJ', 'XOM', 'CVX', 'GS', 'IBM', 'ORCL', 'CRM', 'NOW', 'SNOW', 'PLTR', 'RDDT', 'ARM', 'SMCI', 'DDOG', 'NET', 'FSLY']));
+      .catch(() => setTickers(staticTickers));
   }, []);
 
   const filteredTickers = useMemo(() => {
     const q = query.trim().toUpperCase();
-    return q ? tickers.filter((t) => t.includes(q)) : tickers;
+    if (!q) return tickers;
+    return tickers.filter(
+      (t) => t.symbol.toUpperCase().includes(q) || t.name.toUpperCase().includes(q)
+    );
   }, [query, tickers]);
 
   const MAX_VISIBLE = 120;
@@ -490,35 +503,52 @@ export default function App() {
                 animate="animate"
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
                   gap: 10,
                 }}
               >
-                {visibleTickers.map((symbol) => (
+                {visibleTickers.map((item) => (
                   <motion.button
-                    key={symbol}
+                    key={item.symbol}
                     variants={fadeScale}
                     className="void-card void-card-interactive"
-                    onClick={() => handleSelectTicker(symbol)}
+                    onClick={() => handleSelectTicker(item.symbol)}
                     whileTap={{ scale: 0.97 }}
-                    style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4 }}
+                    style={{
+                      textAlign: 'left',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      minHeight: 110,
+                      padding: '12px 14px',
+                    }}
                   >
-                    <div style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: 15, fontWeight: 700,
-                      color: 'var(--text-primary)',
-                    }}>
-                      {symbol}
-                    </div>
-                    <div style={{
-                      fontFamily: "'Inter', sans-serif",
-                      fontSize: 10, letterSpacing: '0.2em',
-                      color: 'var(--text-muted)', textTransform: 'uppercase',
-                    }}>
-                      Analyze
+                    <div>
+                      <div style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 15, fontWeight: 700,
+                        color: 'var(--text-primary)',
+                      }}>
+                        {item.symbol}
+                      </div>
+                      <div style={{
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: 10,
+                        color: 'var(--text-muted)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        lineHeight: '1.2em',
+                        maxHeight: '2.4em',
+                        marginTop: 2,
+                      }} title={item.name}>
+                        {item.name}
+                      </div>
                     </div>
                     {/* Mini sparkline */}
-                    <svg viewBox="0 0 80 24" style={{ width: '100%', height: 24, marginTop: 4 }} preserveAspectRatio="none">
+                    <svg viewBox="0 0 80 24" style={{ width: '100%', height: 20, marginTop: 4 }} preserveAspectRatio="none">
                       <polyline
                         fill="none"
                         stroke="var(--accent)"
@@ -526,7 +556,7 @@ export default function App() {
                         opacity="0.4"
                         points={Array.from({ length: 10 }, (_, i) => {
                           const x = (i / 9) * 80;
-                          const y = 12 + Math.sin(i * 0.8 + symbol.charCodeAt(0)) * 8;
+                          const y = 10 + Math.sin(i * 0.8 + item.symbol.charCodeAt(0)) * 6;
                           return `${x},${y}`;
                         }).join(' ')}
                       />

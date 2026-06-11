@@ -205,18 +205,24 @@ const fadeScale = {
   animate: { opacity: 1, scale: 1, transition: { duration: 0.4, ease: EASE_OUT } },
 };
 
+import tickersData from './data/tickers_list.json';
+
 interface TickerItem {
   symbol: string;
   name: string;
 }
 
+const staticTickers: TickerItem[] = Object.entries(tickersData as Record<string, string>).map(
+  ([symbol, name]) => ({ symbol, name })
+);
+
 export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [view, setView] = useState<ViewState>('landing');
   const [query, setQuery] = useState('');
-  const [tickers, setTickers] = useState<TickerItem[]>([]);
-  const [allTickersLoaded, setAllTickersLoaded] = useState(false);
-  const [tickerCount, setTickerCount] = useState(0);
+  const [tickers, setTickers] = useState<TickerItem[]>(staticTickers);
+  const [allTickersLoaded, setAllTickersLoaded] = useState(true);
+  const [tickerCount, setTickerCount] = useState(staticTickers.length);
   const [selectedTicker, setSelectedTicker] = useState('');
   const [data, setData] = useState<FinalData | null>(null);
   const [history, setHistory] = useState<{ date: string; price: number }[]>([]);
@@ -229,7 +235,7 @@ export default function App() {
   });
   const dataReceivedRef = useRef(false);
  
-useEffect(() => {
+  useEffect(() => {
     axios.get(`${API_BASE}/tickers`)
       .then((res) => {
         const data = res.data;
@@ -238,24 +244,9 @@ useEffect(() => {
         setAllTickersLoaded(true);
       })
       .catch(() => {
-        const fallbackSymbols = ['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'NFLX', 'CRM', 'ADBE', 'PYPL', 'UBER', 'COIN', 'INTC', 'DIS', 'BA', 'JPM', 'V', 'MA', 'WMT', 'KO', 'PEP', 'PFE', 'JNJ', 'XOM', 'CVX', 'GS', 'IBM', 'ORCL', 'CRM', 'NOW', 'SNOW', 'PLTR', 'RDDT', 'ARM', 'SMCI', 'DDOG', 'NET', 'FSLY'];
-        const fallbackNames: Record<string, string> = {
-          AAPL: "Apple Inc.", NVDA: "NVIDIA Corporation", TSLA: "Tesla, Inc.",
-          MSFT: "Microsoft Corporation", AMZN: "Amazon.com, Inc.", GOOGL: "Alphabet Inc.",
-          META: "Meta Platforms, Inc.", AMD: "Advanced Micro Devices, Inc.", NFLX: "Netflix, Inc.",
-          CRM: "Salesforce, Inc.", ADBE: "Adobe Inc.", PYPL: "PayPal Holdings, Inc.",
-          UBER: "Uber Technologies, Inc.", COIN: "Coinbase Global, Inc.", INTC: "Intel Corporation",
-          DIS: "The Walt Disney Company", BA: "The Boeing Company", JPM: "JPMorgan Chase & Co.",
-          V: "Visa Inc.", MA: "Mastercard Incorporated", WMT: "Walmart Inc.",
-          KO: "The Coca-Cola Company", PEP: "PepsiCo, Inc.", PFE: "Pfizer Inc.",
-          JNJ: "Johnson & Johnson", XOM: "Exxon Mobil Corporation", CVX: "Chevron Corporation",
-          GS: "The Goldman Sachs Group, Inc.", IBM: "International Business Machines Corporation",
-          ORCL: "Oracle Corporation", NOW: "ServiceNow, Inc.", SNOW: "Snowflake Inc.",
-          PLTR: "Palantir Technologies Inc.", RDDT: "Reddit, Inc.", ARM: "Arm Holdings plc",
-          SMCI: "Super Micro Computer, Inc.", DDOG: "Datadog, Inc.", NET: "Cloudflare, Inc.",
-          FSLY: "Fastly, Inc."
-        };
-        setTickers(fallbackSymbols.map(s => ({ symbol: s, name: fallbackNames[s] || s })));
+        setTickers(staticTickers);
+        setTickerCount(staticTickers.length);
+        setAllTickersLoaded(true);
       });
   }, []);
 
